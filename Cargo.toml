@@ -1,0 +1,11 @@
+[package]
+authors = ["kngwyu <yuji.kngw.80s.revive@gmail.com>"]
+name = "rogue-wrapper"
+version = "0.1.0"
+
+[dependencies]
+futures = "0.1.17"
+partial-io = "0.2.5"
+tokio-core = "0.1.10"
+tokio-io = "0.1.4"
+tokio-process = "0.1.4"
