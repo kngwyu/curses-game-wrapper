@@ -2,6 +2,7 @@
 authors = ["kngwyu <yuji.kngw.80s.revive@gmail.com>"]
 name = "rogue-wrapper"
 version = "0.1.0"
+
 [dependencies]
 futures = "0.1.17"
 partial-io = "0.2.5"

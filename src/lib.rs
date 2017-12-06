@@ -12,7 +12,16 @@ use tokio_io::AsyncRead;
 use std::io::{self, Write, BufRead};
 use std::mem;
 
-struct GameData {}
+struct GameSetting {
+    lines: usize,
+    colomns: usize,
+    username: String,
+}
+
+struct GameData {
+    lines: usize,
+    columns: usize,
+}
 
 struct GameRead<A> {
     io: A,
@@ -92,8 +101,8 @@ fn game_loop(mut cmd: Child) -> BoxFuture<ExitStatus, io::Error> {
 fn spawn_game(ai_name: &str) {
     let mut core = Core::new().unwrap();
     let mut cmd = Command::new("rogue");
-    // let mut cmd = cmd.env("USER", ai_name);
-    let mut cmd = cmd.stdout(Stdio::piped()); //.stdin(Stdio::piped());
+    let cmd = cmd.env("ROGUEUSER", ai_name).env("LINES", "1");
+    let cmd = cmd.stdout(Stdio::piped()); //.stdin(Stdio::piped());
     let child = cmd.spawn_async(&core.handle()).unwrap();
     match core.run(game_loop(child)) {
         Ok(_) => {}
@@ -106,6 +115,6 @@ fn spawn_game(ai_name: &str) {
 mod tests {
     #[test]
     fn it_works() {
-        ::spawn_game("hoge");
+        ::spawn_game("my-ai");
     }
 }
