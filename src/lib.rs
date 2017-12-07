@@ -9,6 +9,7 @@ use futures::{BoxFuture, Future, Poll, Stream};
 use tokio_core::reactor::Core;
 use tokio_process::{CommandExt, Child};
 use tokio_io::AsyncRead;
+use tokio_io::codec::{Decoder, Encoder};
 use std::io::{self, Write, BufRead};
 use std::mem;
 
@@ -50,13 +51,10 @@ where
     fn poll(&mut self) -> Poll<Option<Vec<u8>>, io::Error> {
         match try_nb!(self.io.read(&mut self.buf)) {
             val if val > 0 => {
-                println!("read 1 bytes");
+                // println!("read 1 bytes");
                 Ok(Some(mem::replace(&mut self.buf, vec![0; 1])).into())
             }
-            _ => {
-                println!("read 1 bytes");
-                Err(io::Error::new(io::ErrorKind::BrokenPipe, "hi"))
-            }
+            _ => Err(io::Error::new(io::ErrorKind::BrokenPipe, "0 bytes")),
         }
         // if self.buf[0] == 0 {
         //     Err(io::Error::new(io::ErrorKind::BrokenPipe, "hi"))
@@ -81,7 +79,7 @@ fn game_loop(mut cmd: Child) -> BoxFuture<ExitStatus, io::Error> {
     // });
     let read = GameRead::new(reader);
     let cycle = read.for_each(move |r| {
-        println!("{:?}", r);
+        println!("{}", r[0] as char);
         // write!(writer, "q").unwrap();
         Ok(())
     });
@@ -101,7 +99,10 @@ fn game_loop(mut cmd: Child) -> BoxFuture<ExitStatus, io::Error> {
 fn spawn_game(ai_name: &str) {
     let mut core = Core::new().unwrap();
     let mut cmd = Command::new("rogue");
-    let cmd = cmd.env("ROGUEUSER", ai_name).env("LINES", "1");
+    let cmd = cmd.env("ROGUEUSER", ai_name).env("LINES", "24").env(
+        "COLUMNS",
+        "80",
+    );
     let cmd = cmd.stdout(Stdio::piped()); //.stdin(Stdio::piped());
     let child = cmd.spawn_async(&core.handle()).unwrap();
     match core.run(game_loop(child)) {
