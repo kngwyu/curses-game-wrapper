@@ -4,6 +4,7 @@ name = "curses-game-wrapper"
 version = "0.0.1"
 
 [dependencies]
+ascii = "0.8.6"
 bitflags = "1.0.1"
 slog = "2.0.12"
 sloggers = "0.2.2"

@@ -7,7 +7,9 @@ use sloggers::terminal::{TerminalLoggerBuilder, Destination};
 use vte::Perform;
 use std::str;
 use std::default::Default;
-#[derive(Copy, Clone, Debug)]
+use std::cmp::{min, max};
+
+#[derive(Copy, Clone, Debug, Default)]
 struct Cursor {
     x: usize,
     y: usize,
@@ -17,11 +19,10 @@ impl Cursor {
         Cursor { x: x, y: y }
     }
 }
-impl Default for Cursor {
-    fn default() -> Cursor {
-        Cursor { x: 0, y: 0 }
-    }
-}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LineRange(usize, usize);
+
 #[derive(Debug)]
 pub struct GameData {
     buf: Vec<Vec<u8>>,
@@ -29,10 +30,11 @@ pub struct GameData {
     height: usize,
     width: usize,
     mode: TermMode,
+    line_range: LineRange,
+    saved_cur: Cursor,
     logger: Logger,
     show_type: GameShowType,
 }
-
 
 impl GameData {
     pub fn from_setting(s: &GameSetting) -> GameData {
@@ -40,8 +42,10 @@ impl GameData {
             buf: vec![vec![b' '; s.columns]; s.lines],
             cur: Cursor::default(),
             height: s.lines,
-            width: s.lines,
+            width: s.columns,
             mode: TermMode::default(),
+            line_range: LineRange::default(),
+            saved_cur: Cursor::default(),
             logger: match s.debug_log {
                         LogType::File((ref name, level)) => {
                             FileLoggerBuilder::new(&name).level(level).build()
@@ -64,6 +68,9 @@ impl GameData {
                     .unwrap(),
             show_type: s.game_show,
         }
+    }
+    pub fn ret_screen(&self) -> Vec<Vec<u8>> {
+        self.buf.clone()
     }
     fn is_cursor_valid(&self) -> bool {
         self.cur.y < self.height && self.cur.x < self.width
@@ -98,10 +105,177 @@ impl GameData {
     fn goto(&mut self, c: Cursor) {
         self.cur = c;
     }
-    fn clear_scr(&mut self, mode: ClearMode) {}
-    fn clear_line(&mut self, mode: LineClearMode) {}
-    fn scroll_up(&mut self, num: usize) {}
-    fn scroll_down(&mut self, num: usize) {}
+    fn clear_scr(&mut self, mode: ClearMode) {
+        match mode {
+            ClearMode::All => {
+                for i in 0..self.height {
+                    for j in 0..self.width {
+                        self.buf[i][j] = b' ';
+                    }
+                }
+            }
+            ClearMode::Above => {
+                for i in 0..self.cur.y {
+                    for j in 0..self.width {
+                        self.buf[i][j] = b' ';
+                    }
+                }
+                for j in 0..(self.cur.x + 1) {
+                    self.buf[self.cur.y][j] = b' ';
+                }
+            }
+            ClearMode::Below => {
+                for i in (self.cur.y + 1)..self.height {
+                    for j in 0..self.width {
+                        self.buf[i][j] = b' ';
+                    }
+                }
+                for j in self.cur.x..self.width {
+                    self.buf[self.cur.y][j] = b' ';
+                }
+            }
+            // Oh my god tell me what should I do
+            ClearMode::Saved => {}
+        }
+    }
+    fn clear_line(&mut self, mode: LineClearMode) {
+        match mode {
+            LineClearMode::Right => {
+                for i in self.cur.x..self.width {
+                    self.buf[self.cur.y][i] = b' ';
+                }
+            }
+            LineClearMode::Left => {
+                for i in 0..self.cur.x + 1 {
+                    self.buf[self.cur.y][i] = b' ';
+                }
+            }
+            LineClearMode::All => {
+                for i in 0..self.width {
+                    self.buf[self.cur.y][i] = b' ';
+                }
+            }
+        }
+    }
+    fn scroll_up(&mut self, num: usize) {
+        let mut tmp = vec![vec![b' '; self.width]; self.height];
+        for (j, i) in (num..self.height).enumerate() {
+            tmp[j] = self.buf[i].clone();
+        }
+        self.buf = tmp;
+    }
+    fn scroll_down(&mut self, num: usize) {
+        let mut tmp = vec![vec![b' '; self.width]; self.height];
+        for i in 0..(self.height - num) {
+            tmp[i + num] = self.buf[i].clone();
+        }
+        self.buf = tmp;
+    }
+    fn insert_blank_lines(&mut self, num: usize) {
+        let mut tmp = vec![vec![b' '; self.width]; self.height];
+        for i in 0..self.height {
+            if i < self.cur.y {
+                tmp[i] = self.buf[i].clone();
+            } else if i >= self.cur.y + num {
+                tmp[i] = self.buf[i - num].clone();
+            }
+        }
+        self.buf = tmp;
+    }
+    fn delete_lines(&mut self, num: usize) {
+        let mut tmp = vec![vec![b' '; self.width]; self.height];
+        for i in 0..self.height {
+            if i < self.cur.y {
+                tmp[i] = self.buf[i].clone();
+            } else if i + num < self.height {
+                tmp[i] = self.buf[i + num].clone();
+            }
+        }
+        self.buf = tmp;
+    }
+    fn insert_blank_chars(&mut self, num: usize) {
+        let mut tmp = vec![b' '; self.width];
+        for j in 0..self.width {
+            if j < self.cur.x {
+                tmp[j] = self.buf[self.cur.y][j];
+            } else if j >= self.cur.x + num {
+                tmp[j] = self.buf[self.cur.y][j + num];
+            }
+        }
+        self.buf[self.cur.y] = tmp;
+    }
+    fn erase_chars(&mut self, num: usize) {
+        for j in self.cur.x..min(self.cur.x + num, self.width) {
+            self.buf[self.cur.y][j] = b' ';
+        }
+    }
+    fn delete_chars(&mut self, num: usize) {
+        let mut tmp = vec![b' '; self.width];
+        for j in 0..self.width {
+            if j < self.cur.x {
+                tmp[j] = self.buf[self.cur.y][j];
+            } else if j + num < self.width {
+                tmp[j] = self.buf[self.cur.y][j + num];
+            }
+        }
+        self.buf[self.cur.y] = tmp;
+    }
+    fn deccolm(&self) {
+        unimplemented!("deccolm");
+    }
+    fn unset_mode(&mut self, mode: ModeInt) {
+        match mode {
+            ModeInt::SwapScreenAndSetRestoreCursor => self.restore_cursor(),
+            ModeInt::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
+            ModeInt::CursorKeys => self.mode.remove(TermMode::APP_CURSOR),
+            ModeInt::ReportMouseClicks => self.mode.remove(TermMode::MOUSE_REPORT_CLICK),
+            ModeInt::ReportMouseMotion => self.mode.remove(TermMode::MOUSE_MOTION),
+            ModeInt::ReportFocusInOut => self.mode.remove(TermMode::FOCUS_IN_OUT),
+            ModeInt::BracketedPaste => self.mode.remove(TermMode::BRACKETED_PASTE),
+            ModeInt::SgrMouse => self.mode.remove(TermMode::SGR_MOUSE),
+            ModeInt::LineWrap => self.mode.remove(TermMode::LINE_WRAP),
+            ModeInt::LineFeedNewLine => self.mode.remove(TermMode::LINE_FEED_NEW_LINE),
+            ModeInt::Origin => self.mode.remove(TermMode::ORIGIN),
+            ModeInt::DECCOLM => self.deccolm(),
+            ModeInt::Insert => self.mode.remove(TermMode::INSERT),
+            _ => trace!(self.logger, "ignoring unset_mode"),
+        }
+    }
+    fn set_mode(&mut self, mode: ModeInt) {
+        match mode {
+            ModeInt::SwapScreenAndSetRestoreCursor => self.restore_cursor(),
+            ModeInt::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
+            ModeInt::CursorKeys => self.mode.insert(TermMode::APP_CURSOR),
+            ModeInt::ReportMouseClicks => self.mode.insert(TermMode::MOUSE_REPORT_CLICK),
+            ModeInt::ReportMouseMotion => self.mode.insert(TermMode::MOUSE_MOTION),
+            ModeInt::ReportFocusInOut => self.mode.insert(TermMode::FOCUS_IN_OUT),
+            ModeInt::BracketedPaste => self.mode.insert(TermMode::BRACKETED_PASTE),
+            ModeInt::SgrMouse => self.mode.insert(TermMode::SGR_MOUSE),
+            ModeInt::LineWrap => self.mode.insert(TermMode::LINE_WRAP),
+            ModeInt::LineFeedNewLine => self.mode.insert(TermMode::LINE_FEED_NEW_LINE),
+            ModeInt::Origin => self.mode.insert(TermMode::ORIGIN),
+            ModeInt::DECCOLM => self.deccolm(),
+            ModeInt::Insert => self.mode.insert(TermMode::INSERT),
+            _ => trace!(self.logger, "ignoring set_mode"),
+        }
+    }
+    fn save_cursor(&mut self) {
+        self.saved_cur = self.cur;
+    }
+    fn restore_cursor(&mut self) {
+        self.cur = self.saved_cur;
+    }
+    fn reverse_index(&mut self) {
+        let hi = self.line_range.0;
+        if self.cur.y > hi {
+            self.sub_y(1);
+        } else {
+            self.scroll_down(1);
+        }
+    }
+    fn dectest(&mut self) {
+        unimplemented!("dectest");
+    }
 }
 
 
@@ -116,9 +290,9 @@ impl Perform for GameData {
     // C0orC1
     fn execute(&mut self, byte: u8) {
         match byte {
-            C0::BS => self.cur.x -= 1, // backspace
+            C0::BS => self.sub_x(1), // backspace
             C0::CR => self.goto_x(0),
-            C0::LF | C0::VT | C0::FF => self.cur.y += 1, // linefeed
+            C0::LF | C0::VT | C0::FF => self.add_y(1), // linefeed
             C1::NEL => {
                 self.cur.y += 1;
                 if self.mode.contains(TermMode::LINE_FEED_NEW_LINE) {
@@ -142,20 +316,17 @@ impl Perform for GameData {
             |id: usize, default: i64| -> i64 { if id >= args.len() { default } else { args[id] } };
         trace!(self.logger, "[trace! (CSI)] action: {}", action);
         match action {
-            '@' => {
-                let num = args_or(0, 1);
-
-            }
-            'A' => self.sub_y(args_or(0, 1) as usize),
-            'B' | 'e' => self.add_y(args_or(0, 1) as usize),
-            'C' | 'a' => self.add_x(args_or(0, 1) as usize),
-            'D' => self.sub_x(args_or(0, 1) as usize),
+            '@' => self.insert_blank_chars(args_or(0, 1) as _),
+            'A' => self.sub_y(args_or(0, 1) as _),
+            'B' | 'e' => self.add_y(args_or(0, 1) as _),
+            'C' | 'a' => self.add_x(args_or(0, 1) as _),
+            'D' => self.sub_x(args_or(0, 1) as _),
             'E' => {
-                self.add_y(args_or(0, 1) as usize);
+                self.add_y(args_or(0, 1) as _);
                 self.goto_x(0);
             }
             'F' => {
-                self.sub_y(args_or(0, 1) as usize);
+                self.sub_y(args_or(0, 1) as _);
                 self.goto_x(0);
             }
             'G' | '`' => self.goto_x(args_or(0, 1) as usize - 1),
@@ -183,13 +354,68 @@ impl Perform for GameData {
                 };
                 self.clear_line(mode);
             }
-            'S' => self.scroll_up(args_or(0, 1) as usize),
-            'T' => self.scroll_down(args_or(0, 1) as usize),
-            'L' => {}
+            'S' => self.scroll_up(args_or(0, 1) as _),
+            'T' => self.scroll_down(args_or(0, 1) as _),
+            'L' => self.insert_blank_lines(args_or(0, 1) as _),
+            'l' => {
+                let mode = ModeInt::from_primitive(private, args_or(0, 1));
+                match mode {
+                    Some(m) => self.unset_mode(m),
+                    None => unhandled!(),
+                }
+            }
+            'M' => self.delete_lines(args_or(0, 1) as _),
+            'X' => self.erase_chars(args_or(0, 1) as _),
+            'P' => self.delete_chars(args_or(0, 1) as _),
+            'd' => self.goto_y(args_or(0, 1) as _),
+            'h' => {
+                let mode = ModeInt::from_primitive(private, args_or(0, 1));
+                match mode {
+                    Some(m) => self.set_mode(m),
+                    None => unhandled!(),
+                }
+            }
+            'r' => {
+                // ??
+                if private {
+                    unhandled!();
+                }
+                let top = args_or(0, 1) as usize - 1;
+                let bottom = args_or(1, self.height as _) as usize;
+                self.line_range = LineRange(top, bottom);
+            }
+            's' => self.save_cursor(),
+            'u' => self.restore_cursor(),
             _ => {}
         }
     }
-    fn esc_dispatch(&mut self, params: &[i64], intermediates: &[u8], ignore: bool, byte: u8) {}
+    fn esc_dispatch(&mut self, params: &[i64], intermediates: &[u8], _ignore: bool, byte: u8) {
+        macro_rules! unhandled {
+            () => {{
+                debug!(self.logger, "[unhandled! (ESC)]  params={:?}, ints={:?}, byte={:?} ({:02x})",
+                       params, intermediates, byte as char, byte);
+                return;
+            }}
+        }
+        match byte {
+            b'D' => self.add_y(1),
+            b'E' => {
+                self.add_y(1);
+                self.goto_x(0);
+            }
+            b'M' => self.reverse_index(),
+            b'7' => self.save_cursor(),
+            b'8' => {
+                if !intermediates.is_empty() && intermediates[0] == b'#' {
+                    self.dectest();
+                } else {
+                    self.restore_cursor();
+                }
+            }
+            b'\\' => {}
+            _ => unhandled!(),
+        }
+    }
     // unsupported now
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
         debug!(
