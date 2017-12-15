@@ -5,9 +5,9 @@ extern crate sloggers;
 #[macro_use]
 extern crate bitflags;
 extern crate ascii;
-mod game_data;
+mod term_data;
 
-use game_data::GameData;
+use term_data::TermData;
 use std::process::{Command, Stdio, Child};
 use std::io::{Read, Write, BufRead, BufReader};
 use std::sync::mpsc;
@@ -16,6 +16,7 @@ use std::str;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::time::Duration;
+use std::fmt::{self, Debug, Formatter};
 use vte::Parser;
 pub use sloggers::types::Severity;
 pub use ascii::AsciiChar;
@@ -138,7 +139,7 @@ impl GameSetting {
         self
     }
     pub fn build(self) -> GameEnv {
-        let dat = GameData::from_setting(&self);
+        let dat = TermData::from_setting(&self);
         let t = self.timeout;
         let m = self.max_loop;
         GameEnv {
@@ -151,11 +152,39 @@ impl GameSetting {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ActionResult {
     Changed(Vec<Vec<u8>>),
     NotChanged,
     GameEnded,
+}
+impl Debug for ActionResult {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        macro_rules! write_or {
+            ($fmt:expr) => (match write!(f, $fmt) {
+                Ok(_) => {}
+                Err(err) => return Err(err),
+            });
+            ($fmt:expr, $($arg:tt)*) => (match write!(f, $fmt, $($arg)*) {
+                Ok(_) => {}
+                Err(err) => return Err(err),
+            });
+        }
+        match *self {
+            ActionResult::Changed(ref buf) => {
+                write_or!("ActionResult::Changed\n");
+                write_or!("--------------------\n");
+                for v in buf.into_iter() {
+                    let s = str::from_utf8(v).unwrap();
+                    write_or!("{}\n", s);
+                }
+                write_or!("--------------------\n");
+                Ok(())
+            }
+            ActionResult::NotChanged => write!(f, "ActionResult::NotChanged\n"),
+            ActionResult::GameEnded => write!(f, "ActionResult::GameEnded\n"),
+        }
+    }
 }
 pub trait Reactor {
     fn action(&mut self, screen: ActionResult, turn: usize) -> Option<Vec<u8>>;
@@ -164,7 +193,7 @@ pub trait Reactor {
 }
 pub struct GameEnv {
     process: ProcHandler,
-    game_data: GameData,
+    game_data: TermData,
     timeout: Duration,
     max_loop: usize,
     parser: Parser,
@@ -172,6 +201,7 @@ pub struct GameEnv {
 impl GameEnv {
     fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
+        self.process.run();
         for i in 0..self.max_loop {
             let action_res = match self.process.rx.recv_timeout(self.timeout) {
                 Ok(rec) => {
@@ -193,6 +223,7 @@ impl GameEnv {
                     }
                 }
             };
+            //            print!("{:?}", action_res);
             match ai.action(action_res, i + 1) {
                 Some(bytes) => {
                     self.process.write(&bytes);
@@ -297,7 +328,7 @@ mod tests {
         use LogType;
         use Severity;
         impl Reactor for EmptyAI {
-            fn action(&mut self, screen: ActionResult, turn: usize) -> Option<Vec<u8>> {
+            fn action(&mut self, _screen: ActionResult, turn: usize) -> Option<Vec<u8>> {
                 let mut res = Vec::new();
                 if turn < 10 {
                     res.push(b'h');
@@ -308,7 +339,6 @@ mod tests {
                 } else if turn == 12 {
                     res.push(AsciiChar::CarriageReturn.as_byte());
                 }
-                print!("{:?}", screen);
                 Some(res)
             }
             fn init(&mut self) {}
@@ -318,8 +348,8 @@ mod tests {
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug)))
-            .max_loop(100);
+            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
+            .max_loop(50);
         let game = gs.build();
         let mut ai = EmptyAI {};
         game.play(&mut ai);

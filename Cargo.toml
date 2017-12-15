@@ -6,6 +6,10 @@ version = "0.0.1"
 [dependencies]
 ascii = "0.8.6"
 bitflags = "1.0.1"
-slog = "2.0.12"
 sloggers = "0.2.2"
 vte = "0.3.2"
+
+[dependencies.slog]
+version = "2.0.12"
+features = ["max_level_trace", "release_max_level_warn"]
+

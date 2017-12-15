@@ -7,7 +7,7 @@ use sloggers::terminal::{TerminalLoggerBuilder, Destination};
 use vte::Perform;
 use std::str;
 use std::default::Default;
-use std::cmp::{min, max};
+use std::cmp::min;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Cursor {
@@ -24,7 +24,7 @@ impl Cursor {
 struct LineRange(usize, usize);
 
 #[derive(Debug)]
-pub struct GameData {
+pub struct TermData {
     buf: Vec<Vec<u8>>,
     cur: Cursor,
     height: usize,
@@ -32,13 +32,13 @@ pub struct GameData {
     mode: TermMode,
     line_range: LineRange,
     saved_cur: Cursor,
-    logger: Logger,
+    pub logger: Logger,
     show_type: GameShowType,
 }
 
-impl GameData {
-    pub fn from_setting(s: &GameSetting) -> GameData {
-        GameData {
+impl TermData {
+    pub fn from_setting(s: &GameSetting) -> TermData {
+        TermData {
             buf: vec![vec![b' '; s.columns]; s.lines],
             cur: Cursor::default(),
             height: s.lines,
@@ -48,7 +48,7 @@ impl GameData {
             saved_cur: Cursor::default(),
             logger: match s.debug_log {
                         LogType::File((ref name, level)) => {
-                            FileLoggerBuilder::new(&name).level(level).build()
+                            FileLoggerBuilder::new(name).level(level).build()
                         }
                         LogType::Stdout(level) => {
                             TerminalLoggerBuilder::new()
@@ -76,7 +76,33 @@ impl GameData {
         self.cur.y < self.height && self.cur.x < self.width
     }
     fn assert_cursor(&self) {
-        assert!(self.is_cursor_valid(), "Cursor has invalid val!");
+        assert!(
+            self.is_cursor_valid(),
+            "Cursor has invalid val!, {:?}",
+            self.cur
+        );
+    }
+    fn carriage_return(&mut self) {
+        self.cur.x = 0;
+    }
+    fn linefeed(&mut self) {
+        let nxt = self.cur.y + 1;
+        if nxt == self.line_range.1 {
+            self.scroll_up(1);
+        } else if nxt < self.height {
+            self.cur.y += 1;
+        }
+    }
+    fn backspace(&mut self) {
+        if self.cur.x > 0 {
+            self.cur.x -= 1;
+        }
+    }
+    fn newline(&mut self) {
+        self.linefeed();
+        if self.mode.contains(TermMode::LINE_FEED_NEW_LINE) {
+            self.carriage_return();
+        }
     }
     fn add_x(&mut self, num: usize) {
         self.cur.x += num;
@@ -259,6 +285,12 @@ impl GameData {
             _ => trace!(self.logger, "ignoring set_mode"),
         }
     }
+    fn set_keyboard_app_mode(&mut self) {
+        self.mode.insert(TermMode::APP_KEYPAD);
+    }
+    fn unset_keyboard_app_mode(&mut self) {
+        self.mode.remove(TermMode::APP_KEYPAD);
+    }
     fn save_cursor(&mut self) {
         self.saved_cur = self.cur;
     }
@@ -279,9 +311,10 @@ impl GameData {
 }
 
 
-impl Perform for GameData {
+impl Perform for TermData {
     // draw
     fn print(&mut self, c: char) {
+        trace!(self.logger, "(print) c: {:?} cursor: {:?}", c, self.cur);
         self.assert_cursor();
         assert!(c.is_ascii(), "Non Ascii char Input!");
         self.buf[self.cur.y][self.cur.x] = c as u8;
@@ -289,17 +322,18 @@ impl Perform for GameData {
     }
     // C0orC1
     fn execute(&mut self, byte: u8) {
+        trace!(
+            self.logger,
+            "(exectute) byte: {:?}({:02x})",
+            byte as char,
+            byte
+        );
         match byte {
             C0::BS => self.sub_x(1), // backspace
-            C0::CR => self.goto_x(0),
-            C0::LF | C0::VT | C0::FF => self.add_y(1), // linefeed
-            C1::NEL => {
-                self.cur.y += 1;
-                if self.mode.contains(TermMode::LINE_FEED_NEW_LINE) {
-                    self.cur.x = 1;
-                }
-            }
-            _ => debug!(self.logger, "[unhandled] execute byte={:02x}", byte),
+            C0::CR => self.carriage_return(),
+            C0::LF | C0::VT | C0::FF => self.linefeed(),
+            C1::NEL => self.newline(),
+            _ => warn!(self.logger, "[unhandled!] execute byte={:02x}", byte),
         }
     }
 
@@ -307,27 +341,35 @@ impl Perform for GameData {
         let private = intermediates.get(0).map(|b| *b == b'?').unwrap_or(false);
         macro_rules! unhandled {
             () => {{
-                debug!(self.logger, "[unhandled! (CSI)] action={:?}, args={:?}, intermediates={:?}",
+                warn!(self.logger, "[unhandled! (CSI)] action={:?}, args={:?}, intermediates={:?}",
                              action, args, intermediates);
                 return;
             }}
         }
         let args_or =
             |id: usize, default: i64| -> i64 { if id >= args.len() { default } else { args[id] } };
-        trace!(self.logger, "[trace! (CSI)] action: {}", action);
+        trace!(
+            self.logger,
+            "(CSI) action={:?}, args={:?}, intermediates={:?}",
+            action,
+            args,
+            intermediates
+        );
         match action {
             '@' => self.insert_blank_chars(args_or(0, 1) as _),
             'A' => self.sub_y(args_or(0, 1) as _),
-            'B' | 'e' => self.add_y(args_or(0, 1) as _),
-            'C' | 'a' => self.add_x(args_or(0, 1) as _),
-            'D' => self.sub_x(args_or(0, 1) as _),
+            'B' | 'e' => self.add_y(args_or(0, 1) as _), // move down
+            'C' | 'a' => self.add_x(args_or(0, 1) as _), // move forward
+            'D' => self.sub_x(args_or(0, 1) as _), // move backward
             'E' => {
+                // move down and CR
                 self.add_y(args_or(0, 1) as _);
-                self.goto_x(0);
+                self.carriage_return();
             }
             'F' => {
+                // move up and CR
                 self.sub_y(args_or(0, 1) as _);
-                self.goto_x(0);
+                self.carriage_return();
             }
             'G' | '`' => self.goto_x(args_or(0, 1) as usize - 1),
             'H' | 'f' => {
@@ -367,7 +409,7 @@ impl Perform for GameData {
             'M' => self.delete_lines(args_or(0, 1) as _),
             'X' => self.erase_chars(args_or(0, 1) as _),
             'P' => self.delete_chars(args_or(0, 1) as _),
-            'd' => self.goto_y(args_or(0, 1) as _),
+            'd' => self.goto_y(args_or(0, 1) as usize - 1),
             'h' => {
                 let mode = ModeInt::from_primitive(private, args_or(0, 1));
                 match mode {
@@ -392,11 +434,19 @@ impl Perform for GameData {
     fn esc_dispatch(&mut self, params: &[i64], intermediates: &[u8], _ignore: bool, byte: u8) {
         macro_rules! unhandled {
             () => {{
-                debug!(self.logger, "[unhandled! (ESC)]  params={:?}, ints={:?}, byte={:?} ({:02x})",
+                warn!(self.logger, "[unhandled! (ESC)]  params={:?}, ints={:?}, byte={:?} ({:02x})",
                        params, intermediates, byte as char, byte);
                 return;
             }}
         }
+        trace!(
+            self.logger,
+            "(ESC)  params={:?}, ints={:?}, byte={:?} ({:02x})",
+            params,
+            intermediates,
+            byte as char,
+            byte
+        );
         match byte {
             b'D' => self.add_y(1),
             b'E' => {
@@ -412,6 +462,9 @@ impl Perform for GameData {
                     self.restore_cursor();
                 }
             }
+            // b'B' => {}
+            b'>' => self.set_keyboard_app_mode(),
+            b'=' => self.unset_keyboard_app_mode(),
             b'\\' => {}
             _ => unhandled!(),
         }
