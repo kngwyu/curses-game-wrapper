@@ -12,6 +12,7 @@ use term_data::TermData;
 use std::process::{Command, Stdio, Child};
 use std::io::{Read, Write, BufReader};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::thread::{self, JoinHandle};
 use std::str;
@@ -206,23 +207,25 @@ impl GameEnv {
     fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
         ai.init();
+
+        macro_rules! send_or {
+            ($to:expr, $handle:expr) => (
+                if let Err(why) = $to.send_bytes($handle) {
+                    debug!(
+                        self.term_data.logger,
+                        concat!("can't send to ", stringify!($to), ": {}"),
+                        why.description()
+                    );
+                }
+            )
+        }
+
         let proc_handle = self.process.run();
         let mut viewer: Box<GameViewer> = match self.draw_type {
             DrawType::Terminal(d) => Box::new(TerminalViewer::new(d)),
             DrawType::Null => Box::new(EmptyViewer {}),
         };
         let viewer_handle = viewer.run();
-        macro_rules! send_or {
-            ($handle:expr) => (
-                if let Err(why) = viewer.send_bytes($handle) {
-                    debug!(
-                        self.term_data.logger,
-                        "viewer error: {}",
-                        why.description()
-                    );
-                }
-            )
-        }
         let mut parser = Parser::new();
         let mut proc_dead = false;
         for i in 0..self.max_loop {
@@ -234,17 +237,17 @@ impl GameEnv {
                 Ok(rec) => {
                     match rec {
                         Handle::Panicked => {
-                            send_or!(Handle::Panicked);
+                            send_or!(viewer, Handle::Panicked);
                             panic!("panicked in child thread")
                         }
                         Handle::Zero => {
                             debug!(self.term_data.logger, "read zero bytes");
-                            send_or!(Handle::Zero);
+                            send_or!(viewer, Handle::Zero);
                             proc_dead = true;
                             ActionResult::GameEnded
                         }
                         Handle::Valid(ref r) => {
-                            send_or!(Handle::Valid(r));
+                            send_or!(viewer, Handle::Valid(r));
                             for c in r {
                                 parser.advance(&mut self.term_data, *c);
                             }
@@ -260,17 +263,8 @@ impl GameEnv {
                 }
             };
             trace!(self.term_data.logger, "{:?}, turn: {}", action_res, i);
-            match ai.action(action_res, i) {
-                Some(bytes) => {
-                    if let Err(why) = self.process.send_bytes(&bytes) {
-                        debug!(
-                            self.term_data.logger,
-                            "can't send to child: {}(Game Ended?)",
-                            why.description()
-                        );
-                    }
-                }
-                None => {}
+            if let Some(bytes) = ai.action(action_res, i) {
+                send_or!(self.process, &bytes);
             }
         }
         ai.end();
@@ -280,7 +274,7 @@ impl GameEnv {
                 "Game not ended and killed process forcibly"
             );
             self.process.kill();
-            send_or!(Handle::Zero);
+            send_or!(viewer, Handle::Zero);
         }
         proc_handle.join().unwrap();
         viewer_handle.join().unwrap();
@@ -288,19 +282,19 @@ impl GameEnv {
 }
 
 // handles Sender and Reciever
-pub enum Handle<T> {
+enum Handle<T> {
     Panicked, // thread panicked
     Zero, // read 0 bytes (probably game ended)
     Valid(T), // read 1 or more bytes
 }
 
-pub trait GameViewer {
+trait GameViewer {
     fn run(&mut self) -> JoinHandle<()>;
     fn send_bytes(&mut self, bytes: Handle<&[u8]>) -> Result<(), ViewerError>;
 }
 
 #[derive(Debug)]
-pub struct ViewerError(String);
+struct ViewerError(String);
 impl fmt::Display for ViewerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -322,7 +316,7 @@ impl GameViewer for EmptyViewer {
     }
 }
 #[derive(Debug)]
-pub struct TerminalViewer {
+struct TerminalViewer {
     tx: mpsc::Sender<Handle<Vec<u8>>>,
     rx: Arc<Mutex<Receiver<Handle<Vec<u8>>>>>,
     sleep_time: Arc<Duration>,
@@ -345,16 +339,12 @@ impl GameViewer for TerminalViewer {
         let sleep = Arc::clone(&self.sleep_time);
         thread::spawn(move || {
             let receiver = rx.lock().unwrap();
-            loop {
-                let game_input = match (*receiver).recv() {
-                    Ok(res) => res,
-                    Err(_) => break,
-                };
+            while let Ok(game_input) = (*receiver).recv() {
                 match game_input {
                     Handle::Valid(ref bytes) => {
                         let s = str::from_utf8(bytes).unwrap();
                         print!("{}", s);
-                        io::stdout().flush().ok().expect("Could not flush stdout");
+                        io::stdout().flush().expect("Could not flush stdout");
                     }
                     Handle::Zero => break,
                     Handle::Panicked => panic!("main thread panicked"),
@@ -396,7 +386,7 @@ struct ProcHandler {
     tx: Sender<Handle<Vec<u8>>>,
     // note : Reciever blocks until some bytes wrote
     rx: Receiver<Handle<Vec<u8>>>,
-    killed: Arc<Mutex<bool>>,
+    killed: Arc<AtomicBool>,
 }
 
 impl ProcHandler {
@@ -405,7 +395,7 @@ impl ProcHandler {
         let cmd = cmd.args(g.args);
         let cmd = cmd.env("LINES", format!("{}", g.lines));
         let cmd = cmd.env("COLUMNS", format!("{}", g.columns));
-        //        let cmd = cmd.env("TERM", "vt100"); You can override it by env
+        let cmd = cmd.env("TERM", "vt100"); //You can override it by env
         let cmd = cmd.envs(g.envs);
         let cmd = cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
         let process = match cmd.spawn() {
@@ -417,22 +407,19 @@ impl ProcHandler {
             my_proc: process,
             tx: tx,
             rx: rx,
-            killed: Arc::new(Mutex::new(false)),
+            killed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn run(&mut self) -> JoinHandle<()> {
         let proc_out = self.my_proc.stdout.take().unwrap();
         let txclone = self.tx.clone();
-        let ac = self.killed.clone();
+        let ac = Arc::clone(&self.killed);
         thread::spawn(move || {
             let mut proc_reader = BufReader::new(proc_out);
             const BUFSIZE: usize = 4096;
             let mut readbuf = vec![0u8; BUFSIZE];
-            loop {
-                if *(*ac).lock().unwrap() {
-                    break;
-                }
+            while !ac.load(Ordering::Relaxed) {
                 match proc_reader.read(&mut readbuf) {
                     Err(why) => {
                         txclone.send(Handle::Panicked).ok();
@@ -464,8 +451,8 @@ impl ProcHandler {
 
     fn kill(&mut self) {
         self.my_proc.kill().unwrap();
-        let ac = self.killed.clone();
-        *(*ac).lock().unwrap() = true;
+        let ac = Arc::clone(&self.killed);
+        ac.store(true, Ordering::Relaxed)
     }
 }
 
@@ -517,8 +504,8 @@ mod tests {
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug)))
-            .max_loop(loopnum + 10)
+            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
+            .max_loop(loopnum + 1)
             .draw_on(Duration::from_millis(200));
         let game = gs.build();
         let mut ai = EmptyAI { loopnum: loopnum };
