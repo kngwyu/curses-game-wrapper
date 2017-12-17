@@ -1,4 +1,4 @@
-use super::{GameSetting, LogType, GameShowType};
+use super::{GameSetting, LogType};
 use slog::Logger;
 use sloggers::Build;
 use sloggers::file::FileLoggerBuilder;
@@ -23,6 +23,12 @@ impl Cursor {
 #[derive(Clone, Copy, Debug, Default)]
 struct LineRange(usize, usize);
 
+impl LineRange {
+    fn contains(&self, u: usize) -> bool {
+        self.0 <= u && u < self.1
+    }
+}
+
 #[derive(Debug)]
 pub struct TermData {
     buf: Vec<Vec<u8>>,
@@ -30,10 +36,10 @@ pub struct TermData {
     height: usize,
     width: usize,
     mode: TermMode,
-    line_range: LineRange,
+    scroll_range: LineRange,
     saved_cur: Cursor,
     pub logger: Logger,
-    show_type: GameShowType,
+    preceeding: Option<u8>,
 }
 
 impl TermData {
@@ -44,7 +50,7 @@ impl TermData {
             height: s.lines,
             width: s.columns,
             mode: TermMode::default(),
-            line_range: LineRange::default(),
+            scroll_range: LineRange(0, s.lines),
             saved_cur: Cursor::default(),
             logger: match s.debug_log {
                         LogType::File((ref name, level)) => {
@@ -66,7 +72,7 @@ impl TermData {
                     }
                     .ok()
                     .unwrap(),
-            show_type: s.game_show,
+            preceeding: None,
         }
     }
     pub fn ret_screen(&self) -> Vec<Vec<u8>> {
@@ -82,12 +88,25 @@ impl TermData {
             self.cur
         );
     }
+    fn input(&mut self, c: u8) {
+        while self.cur.x >= self.width {
+            if !self.mode.contains(TermMode::LINE_WRAP) {
+                return;
+            }
+            self.cur.x -= self.width;
+            self.linefeed();
+        }
+        self.assert_cursor();
+        self.buf[self.cur.y][self.cur.x] = c;
+        self.preceeding = Some(c);
+        self.cur.x += 1;
+    }
     fn carriage_return(&mut self) {
         self.cur.x = 0;
     }
     fn linefeed(&mut self) {
         let nxt = self.cur.y + 1;
-        if nxt == self.line_range.1 {
+        if nxt == self.scroll_range.1 {
             self.scroll_up(1);
         } else if nxt < self.height {
             self.cur.y += 1;
@@ -106,10 +125,9 @@ impl TermData {
     }
     fn add_x(&mut self, num: usize) {
         self.cur.x += num;
-        assert!(self.cur.x < self.width);
     }
     fn add_y(&mut self, num: usize) {
-        self.cur.x += num;
+        self.cur.y += num;
         assert!(self.cur.y < self.height);
     }
     fn sub_x(&mut self, num: usize) {
@@ -122,7 +140,6 @@ impl TermData {
     }
     fn goto_x(&mut self, num: usize) {
         self.cur.x = num;
-        assert!(self.cur.x < self.width);
     }
     fn goto_y(&mut self, num: usize) {
         self.cur.y = num;
@@ -184,40 +201,50 @@ impl TermData {
         }
     }
     fn scroll_up(&mut self, num: usize) {
-        let mut tmp = vec![vec![b' '; self.width]; self.height];
-        for (j, i) in (num..self.height).enumerate() {
-            tmp[j] = self.buf[i].clone();
+        let origin = self.scroll_range.0;
+        self.scroll_up_relative(origin, num);
+    }
+    fn scroll_up_relative(&mut self, origin: usize, num: usize) {
+        let mut tmp = self.buf.clone();
+        for i in origin..self.scroll_range.1 {
+            if i + num < self.scroll_range.1 {
+                tmp[i] = self.buf[i + num].clone();
+            } else {
+                for j in 0..self.width {
+                    tmp[i][j] = b' ';
+                }
+            }
         }
         self.buf = tmp;
     }
     fn scroll_down(&mut self, num: usize) {
-        let mut tmp = vec![vec![b' '; self.width]; self.height];
-        for i in 0..(self.height - num) {
-            tmp[i + num] = self.buf[i].clone();
+        let origin = self.scroll_range.0;
+        self.scroll_down_relative(origin, num);
+    }
+    fn scroll_down_relative(&mut self, origin: usize, num: usize) {
+        let mut tmp = self.buf.clone();
+        for i in origin..self.scroll_range.1 {
+            if i + num < self.scroll_range.1 {
+                tmp[i + num] = self.buf[i].clone();
+            } else {
+                for j in 0..self.width {
+                    tmp[i][j] = b' ';
+                }
+            }
         }
         self.buf = tmp;
     }
     fn insert_blank_lines(&mut self, num: usize) {
-        let mut tmp = vec![vec![b' '; self.width]; self.height];
-        for i in 0..self.height {
-            if i < self.cur.y {
-                tmp[i] = self.buf[i].clone();
-            } else if i >= self.cur.y + num {
-                tmp[i] = self.buf[i - num].clone();
-            }
+        if self.scroll_range.contains(self.cur.y) {
+            let origin = self.cur.y;
+            self.scroll_down_relative(origin, num);
         }
-        self.buf = tmp;
     }
     fn delete_lines(&mut self, num: usize) {
-        let mut tmp = vec![vec![b' '; self.width]; self.height];
-        for i in 0..self.height {
-            if i < self.cur.y {
-                tmp[i] = self.buf[i].clone();
-            } else if i + num < self.height {
-                tmp[i] = self.buf[i + num].clone();
-            }
+        if self.scroll_range.contains(self.cur.y) {
+            let origin = self.cur.y;
+            self.scroll_up_relative(origin, num);
         }
-        self.buf = tmp;
     }
     fn insert_blank_chars(&mut self, num: usize) {
         let mut tmp = vec![b' '; self.width];
@@ -246,9 +273,7 @@ impl TermData {
         }
         self.buf[self.cur.y] = tmp;
     }
-    fn deccolm(&self) {
-        unimplemented!("deccolm");
-    }
+    fn deccolm(&self) {}
     fn unset_mode(&mut self, mode: ModeInt) {
         match mode {
             ModeInt::SwapScreenAndSetRestoreCursor => self.restore_cursor(),
@@ -298,11 +323,10 @@ impl TermData {
         self.cur = self.saved_cur;
     }
     fn reverse_index(&mut self) {
-        let hi = self.line_range.0;
-        if self.cur.y > hi {
-            self.sub_y(1);
-        } else {
+        if self.cur.y == self.scroll_range.0 {
             self.scroll_down(1);
+        } else if self.cur.y > 0 {
+            self.sub_y(1);
         }
     }
     fn dectest(&mut self) {
@@ -315,25 +339,23 @@ impl Perform for TermData {
     // draw
     fn print(&mut self, c: char) {
         trace!(self.logger, "(print) c: {:?} cursor: {:?}", c, self.cur);
-        self.assert_cursor();
         assert!(c.is_ascii(), "Non Ascii char Input!");
-        self.buf[self.cur.y][self.cur.x] = c as u8;
-        self.cur.x += 1;
+        self.input(c as u8);
     }
     // C0orC1
     fn execute(&mut self, byte: u8) {
         trace!(
             self.logger,
-            "(exectute) byte: {:?}({:02x})",
+            "(exectute) byte: {:?}({:x})",
             byte as char,
             byte
         );
         match byte {
-            C0::BS => self.sub_x(1), // backspace
+            C0::BS => self.backspace(), // backspace
             C0::CR => self.carriage_return(),
             C0::LF | C0::VT | C0::FF => self.linefeed(),
             C1::NEL => self.newline(),
-            _ => warn!(self.logger, "[unhandled!] execute byte={:02x}", byte),
+            _ => warn!(self.logger, "[unhandled!(execute)] byte={:02x}", byte),
         }
     }
 
@@ -350,7 +372,8 @@ impl Perform for TermData {
             |id: usize, default: i64| -> i64 { if id >= args.len() { default } else { args[id] } };
         trace!(
             self.logger,
-            "(CSI) action={:?}, args={:?}, intermediates={:?}",
+            "(CSI) private = {:?}, action={:?}, args={:?}, intermediates={:?}",
+            private,
             action,
             args,
             intermediates
@@ -358,6 +381,15 @@ impl Perform for TermData {
         match action {
             '@' => self.insert_blank_chars(args_or(0, 1) as _),
             'A' => self.sub_y(args_or(0, 1) as _),
+            'b' => {
+                if let Some(c) = self.preceeding {
+                    for _ in 0..args_or(0, 1) {
+                        self.input(c);
+                    }
+                } else {
+                    warn!(self.logger, "Try repeating with No Precceding Char!");
+                }
+            }
             'B' | 'e' => self.add_y(args_or(0, 1) as _), // move down
             'C' | 'a' => self.add_x(args_or(0, 1) as _), // move forward
             'D' => self.sub_x(args_or(0, 1) as _), // move backward
@@ -378,7 +410,7 @@ impl Perform for TermData {
                 self.goto(Cursor::new(x, y));
             }
             'J' => {
-                let mode = match args_or(0, 1) {
+                let mode = match args_or(0, 0) {
                     0 => ClearMode::Below,
                     1 => ClearMode::Above,
                     2 => ClearMode::All,
@@ -388,7 +420,7 @@ impl Perform for TermData {
                 self.clear_scr(mode);
             }
             'K' => {
-                let mode = match args_or(0, 1) {
+                let mode = match args_or(0, 0) {
                     0 => LineClearMode::Right,
                     1 => LineClearMode::Left,
                     2 => LineClearMode::All,
@@ -400,7 +432,8 @@ impl Perform for TermData {
             'T' => self.scroll_down(args_or(0, 1) as _),
             'L' => self.insert_blank_lines(args_or(0, 1) as _),
             'l' => {
-                let mode = ModeInt::from_primitive(private, args_or(0, 1));
+                let mode = ModeInt::from_primitive(private, args_or(0, 0));
+                trace!(self.logger, "unset mode {:?}", mode);
                 match mode {
                     Some(m) => self.unset_mode(m),
                     None => unhandled!(),
@@ -411,7 +444,8 @@ impl Perform for TermData {
             'P' => self.delete_chars(args_or(0, 1) as _),
             'd' => self.goto_y(args_or(0, 1) as usize - 1),
             'h' => {
-                let mode = ModeInt::from_primitive(private, args_or(0, 1));
+                let mode = ModeInt::from_primitive(private, args_or(0, 0));
+                trace!(self.logger, "mode {:?}", mode);
                 match mode {
                     Some(m) => self.set_mode(m),
                     None => unhandled!(),
@@ -424,7 +458,7 @@ impl Perform for TermData {
                 }
                 let top = args_or(0, 1) as usize - 1;
                 let bottom = args_or(1, self.height as _) as usize;
-                self.line_range = LineRange(top, bottom);
+                self.scroll_range = LineRange(top, bottom);
             }
             's' => self.save_cursor(),
             'u' => self.restore_cursor(),
@@ -434,7 +468,7 @@ impl Perform for TermData {
     fn esc_dispatch(&mut self, params: &[i64], intermediates: &[u8], _ignore: bool, byte: u8) {
         macro_rules! unhandled {
             () => {{
-                warn!(self.logger, "[unhandled! (ESC)]  params={:?}, ints={:?}, byte={:?} ({:02x})",
+                warn!(self.logger, "[unhandled! (ESC)]  params={:?}, ints={:?}, byte={:?} ({:x})",
                        params, intermediates, byte as char, byte);
                 return;
             }}

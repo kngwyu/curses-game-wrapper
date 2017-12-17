@@ -5,18 +5,20 @@ extern crate sloggers;
 #[macro_use]
 extern crate bitflags;
 extern crate ascii;
+
 mod term_data;
 
 use term_data::TermData;
 use std::process::{Command, Stdio, Child};
-use std::io::{Read, Write, BufRead, BufReader};
-use std::sync::mpsc;
-use std::thread;
+use std::io::{Read, Write, BufReader};
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Sender, Receiver};
+use std::thread::{self, JoinHandle};
 use std::str;
 use std::error::Error;
-use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 use std::fmt::{self, Debug, Formatter};
+use std::io;
 use vte::Parser;
 pub use sloggers::types::Severity;
 pub use ascii::AsciiChar;
@@ -30,6 +32,8 @@ pub use ascii::AsciiChar;
 //     Critical,
 // }
 
+/// You can choose LogType of wrapper.
+/// This functionality is mainly for developper.
 #[derive(Clone, Debug)]
 pub enum LogType {
     File((String, Severity)),
@@ -37,18 +41,10 @@ pub enum LogType {
     Stderr(Severity),
     None,
 }
-/// You can choose how game is drawn in screen.
-/// If Realtime is chosen, game is drawn as AI is playing, and if
-/// Restore chosen drawing starts when the game is over.
-/// And you can also choose sleep time if Realtime or Restore is
-/// chosen.
-/// '''
-/// '''
 #[derive(Copy, Clone, Debug)]
-pub enum GameShowType {
-    RealTime(Duration),
-    Restore(Duration),
-    None,
+enum DrawType {
+    Terminal(Duration),
+    Null,
 }
 
 /// Game process builder, providing control over how a new process
@@ -56,85 +52,90 @@ pub enum GameShowType {
 /// Like std::process::Command struct, A default configuration can be
 /// generated using Gamesetting::new(command name) and other settings
 /// can be added by builder methods
+/// '''
+/// let loopnum = 50;
+/// let gs = GameSetting::new("rogue")
+///     .env("ROGUEUSER", "EmptyAI")
+///     .lines(24)
+///     .columns(80)
+///     .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
+///     .max_loop(loopnum + 10)
+///     .draw_on(Duration::from_millis(200));
+/// let game = gs.build();
+/// let mut my_ai = EmptyAI { loopnum: loopnum };
+/// game.play(&mut ai);
+/// '''
 #[derive(Clone, Debug)]
-pub struct GameSetting {
+pub struct GameSetting<'a> {
     cmdname: String,
     lines: usize,
     columns: usize,
-    envs: Vec<(OsString, OsString)>,
-    args: Vec<OsString>,
-    game_show: GameShowType,
+    envs: Vec<(&'a str, &'a str)>,
+    args: Vec<&'a str>,
     debug_log: LogType,
     timeout: Duration,
+    draw_type: DrawType,
     max_loop: usize,
 }
-impl GameSetting {
-    pub fn new(command_name: &str) -> GameSetting {
+impl<'a> GameSetting<'a> {
+    pub fn new(command_name: &str) -> Self {
         GameSetting {
             cmdname: String::from(command_name),
             lines: 24,
             columns: 80,
             envs: Vec::new(),
             args: Vec::new(),
-            game_show: GameShowType::None,
             debug_log: LogType::None,
             timeout: Duration::from_millis(100),
+            draw_type: DrawType::Null,
             max_loop: 100000,
         }
     }
-    pub fn columns(mut self, u: usize) -> GameSetting {
+    pub fn columns(mut self, u: usize) -> Self {
         self.columns = u;
         self
     }
-    pub fn lines(mut self, u: usize) -> GameSetting {
+    pub fn lines(mut self, u: usize) -> Self {
         self.lines = u;
         self
     }
-    pub fn arg<S: AsRef<OsStr>>(mut self, s: S) -> GameSetting {
-        self.args.push(s.as_ref().to_owned());
+    pub fn arg(mut self, s: &'a str) -> Self {
+        self.args.push(s);
         self
     }
-    pub fn env<S: AsRef<OsStr>>(mut self, s: S, t: S) -> GameSetting {
-        self.envs.push(
-            (s.as_ref().to_owned(), t.as_ref().to_owned()),
-        );
+    pub fn env(mut self, s: &'a str, t: &'a str) -> Self {
+        self.envs.push((s, t));
         self
     }
-    pub fn args<I, S>(mut self, i: I) -> GameSetting
+    pub fn args<I>(mut self, i: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
+        I: IntoIterator<Item = &'a str>,
     {
-        let v: Vec<OsString> = i.into_iter().map(|x| x.as_ref().to_owned()).collect();
+        let v: Vec<_> = i.into_iter().map(|x| x).collect();
         self.args = v;
         self
     }
-    pub fn envs<I, K, V>(mut self, i: I) -> GameSetting
+    pub fn envs<I>(mut self, i: I) -> Self
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>,
+        I: IntoIterator<Item = (&'a str, &'a str)>,
     {
-        let v: Vec<(OsString, OsString)> =
-            i.into_iter()
-             .map(|(s, t)| (s.as_ref().to_owned(), t.as_ref().to_owned()))
-             .collect();
+        let v: Vec<_> = i.into_iter().map(|(s, t)| (s, t)).collect();
         self.envs = v;
         self
     }
-    pub fn show_type(mut self, t: GameShowType) -> GameSetting {
-        self.game_show = t;
+    pub fn draw_on(mut self, d: Duration) -> Self {
+        self.draw_type = DrawType::Terminal(d);
         self
     }
-    pub fn debug_type(mut self, l: LogType) -> GameSetting {
+    pub fn debug_type(mut self, l: LogType) -> Self {
         self.debug_log = l;
         self
     }
-    pub fn timeout(mut self, d: Duration) -> GameSetting {
+    pub fn timeout(mut self, d: Duration) -> Self {
         self.timeout = d;
         self
     }
-    pub fn max_loop(mut self, t: usize) -> GameSetting {
+    pub fn max_loop(mut self, t: usize) -> Self {
         self.max_loop = t;
         self
     }
@@ -142,12 +143,13 @@ impl GameSetting {
         let dat = TermData::from_setting(&self);
         let t = self.timeout;
         let m = self.max_loop;
+        let d = self.draw_type;
         GameEnv {
             process: ProcHandler::from_setting(self),
-            game_data: dat,
+            term_data: dat,
             timeout: t,
             max_loop: m,
-            parser: Parser::new(),
+            draw_type: d,
         }
     }
 }
@@ -174,7 +176,7 @@ impl Debug for ActionResult {
             ActionResult::Changed(ref buf) => {
                 write_or!("ActionResult::Changed\n");
                 write_or!("--------------------\n");
-                for v in buf.into_iter() {
+                for v in buf {
                     let s = str::from_utf8(v).unwrap();
                     write_or!("{}\n", s);
                 }
@@ -186,33 +188,67 @@ impl Debug for ActionResult {
         }
     }
 }
+
 pub trait Reactor {
     fn action(&mut self, screen: ActionResult, turn: usize) -> Option<Vec<u8>>;
     fn init(&mut self);
     fn end(&mut self);
 }
+
 pub struct GameEnv {
     process: ProcHandler,
-    game_data: TermData,
+    term_data: TermData,
     timeout: Duration,
     max_loop: usize,
-    parser: Parser,
+    draw_type: DrawType,
 }
 impl GameEnv {
     fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
-        self.process.run();
+        ai.init();
+        let proc_handle = self.process.run();
+        let mut viewer: Box<GameViewer> = match self.draw_type {
+            DrawType::Terminal(d) => Box::new(TerminalViewer::new(d)),
+            DrawType::Null => Box::new(EmptyViewer {}),
+        };
+        let viewer_handle = viewer.run();
+        macro_rules! send_or {
+            ($handle:expr) => (
+                if let Err(why) = viewer.send_bytes($handle) {
+                    debug!(
+                        self.term_data.logger,
+                        "viewer error: {}",
+                        why.description()
+                    );
+                }
+            )
+        }
+        let mut parser = Parser::new();
+        let mut proc_dead = false;
         for i in 0..self.max_loop {
+            if proc_dead {
+                trace!(self.term_data.logger, "Game ended in turn {}", i - 1);
+                break;
+            }
             let action_res = match self.process.rx.recv_timeout(self.timeout) {
                 Ok(rec) => {
                     match rec {
-                        Handle::Panicked => panic!("panicked in child thread"),
-                        Handle::Zero => ActionResult::GameEnded,
-                        Handle::Valid(r) => {
+                        Handle::Panicked => {
+                            send_or!(Handle::Panicked);
+                            panic!("panicked in child thread")
+                        }
+                        Handle::Zero => {
+                            debug!(self.term_data.logger, "read zero bytes");
+                            send_or!(Handle::Zero);
+                            proc_dead = true;
+                            ActionResult::GameEnded
+                        }
+                        Handle::Valid(ref r) => {
+                            send_or!(Handle::Valid(r));
                             for c in r {
-                                self.parser.advance(&mut self.game_data, c);
+                                parser.advance(&mut self.term_data, *c);
                             }
-                            ActionResult::Changed(self.game_data.ret_screen())
+                            ActionResult::Changed(self.term_data.ret_screen())
                         }
                     }
                 }
@@ -223,38 +259,154 @@ impl GameEnv {
                     }
                 }
             };
-            //            print!("{:?}", action_res);
-            match ai.action(action_res, i + 1) {
+            trace!(self.term_data.logger, "{:?}, turn: {}", action_res, i);
+            match ai.action(action_res, i) {
                 Some(bytes) => {
-                    self.process.write(&bytes);
+                    if let Err(why) = self.process.send_bytes(&bytes) {
+                        debug!(
+                            self.term_data.logger,
+                            "can't send to child: {}(Game Ended?)",
+                            why.description()
+                        );
+                    }
                 }
                 None => {}
             }
         }
+        ai.end();
+        if !proc_dead {
+            debug!(
+                self.term_data.logger,
+                "Game not ended and killed process forcibly"
+            );
+            self.process.kill();
+            send_or!(Handle::Zero);
+        }
+        proc_handle.join().unwrap();
+        viewer_handle.join().unwrap();
     }
-}
-// exec process
-struct ProcHandler {
-    my_proc: Child,
-    tx: mpsc::Sender<Handle<Vec<u8>>>,
-    // note : Reciever blocks until some bytes wrote
-    rx: mpsc::Receiver<Handle<Vec<u8>>>,
 }
 
 // handles Sender and Reciever
-enum Handle<T> {
+pub enum Handle<T> {
     Panicked, // thread panicked
     Zero, // read 0 bytes (probably game ended)
     Valid(T), // read 1 or more bytes
+}
+
+pub trait GameViewer {
+    fn run(&mut self) -> JoinHandle<()>;
+    fn send_bytes(&mut self, bytes: Handle<&[u8]>) -> Result<(), ViewerError>;
+}
+
+#[derive(Debug)]
+pub struct ViewerError(String);
+impl fmt::Display for ViewerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl Error for ViewerError {
+    fn description(&self) -> &str {
+        &self.0
+    }
+}
+pub struct EmptyViewer {}
+
+impl GameViewer for EmptyViewer {
+    fn run(&mut self) -> JoinHandle<()> {
+        thread::spawn(move || {})
+    }
+    fn send_bytes(&mut self, _bytes: Handle<&[u8]>) -> Result<(), ViewerError> {
+        Ok(())
+    }
+}
+#[derive(Debug)]
+pub struct TerminalViewer {
+    tx: mpsc::Sender<Handle<Vec<u8>>>,
+    rx: Arc<Mutex<Receiver<Handle<Vec<u8>>>>>,
+    sleep_time: Arc<Duration>,
+}
+
+impl TerminalViewer {
+    fn new(d: Duration) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let wrapped_recv = Arc::new(Mutex::new(rx));
+        TerminalViewer {
+            tx: tx,
+            rx: wrapped_recv,
+            sleep_time: Arc::new(d),
+        }
+    }
+}
+impl GameViewer for TerminalViewer {
+    fn run(&mut self) -> JoinHandle<()> {
+        let rx = Arc::clone(&self.rx);
+        let sleep = Arc::clone(&self.sleep_time);
+        thread::spawn(move || {
+            let receiver = rx.lock().unwrap();
+            loop {
+                let game_input = match (*receiver).recv() {
+                    Ok(res) => res,
+                    Err(_) => break,
+                };
+                match game_input {
+                    Handle::Valid(ref bytes) => {
+                        let s = str::from_utf8(bytes).unwrap();
+                        print!("{}", s);
+                        io::stdout().flush().ok().expect("Could not flush stdout");
+                    }
+                    Handle::Zero => break,
+                    Handle::Panicked => panic!("main thread panicked"),
+                }
+                thread::sleep(*sleep);
+            }
+        })
+    }
+    fn send_bytes(&mut self, b: Handle<&[u8]>) -> Result<(), ViewerError> {
+        let txclone = self.tx.clone();
+        let res = match b {
+            Handle::Zero => Handle::Zero,
+            Handle::Panicked => Handle::Panicked,
+            Handle::Valid(b) => Handle::Valid(b.to_owned()),
+        };
+        match txclone.send(res) {
+            Ok(_) => Ok(()),
+            Err(why) => Err(ViewerError(why.description().to_owned())),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ProcessError(String);
+impl fmt::Display for ProcessError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl Error for ProcessError {
+    fn description(&self) -> &str {
+        &self.0
+    }
+}
+
+// exec process
+struct ProcHandler {
+    my_proc: Child,
+    tx: Sender<Handle<Vec<u8>>>,
+    // note : Reciever blocks until some bytes wrote
+    rx: Receiver<Handle<Vec<u8>>>,
+    killed: Arc<Mutex<bool>>,
 }
 
 impl ProcHandler {
     fn from_setting(g: GameSetting) -> ProcHandler {
         let mut cmd = Command::new(&g.cmdname);
         let cmd = cmd.args(g.args);
-        let cmd = cmd.envs(g.envs);
         let cmd = cmd.env("LINES", format!("{}", g.lines));
         let cmd = cmd.env("COLUMNS", format!("{}", g.columns));
+        //        let cmd = cmd.env("TERM", "vt100"); You can override it by env
+        let cmd = cmd.envs(g.envs);
         let cmd = cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
         let process = match cmd.spawn() {
             Ok(p) => p,
@@ -265,54 +417,62 @@ impl ProcHandler {
             my_proc: process,
             tx: tx,
             rx: rx,
+            killed: Arc::new(Mutex::new(false)),
         }
     }
-    fn run(&mut self) {
+
+    fn run(&mut self) -> JoinHandle<()> {
         let proc_out = self.my_proc.stdout.take().unwrap();
         let txclone = self.tx.clone();
+        let ac = self.killed.clone();
         thread::spawn(move || {
             let mut proc_reader = BufReader::new(proc_out);
-            const BUFSIZE: usize = 2048;
+            const BUFSIZE: usize = 4096;
+            let mut readbuf = vec![0u8; BUFSIZE];
             loop {
-                let mut readbuf = vec![0u8; BUFSIZE];
+                if *(*ac).lock().unwrap() {
+                    break;
+                }
                 match proc_reader.read(&mut readbuf) {
                     Err(why) => {
                         txclone.send(Handle::Panicked).ok();
-                        panic!("couldn't read rogue stdout: {}", why.description())
-                    }
-                    Ok(BUFSIZE) => {
-                        txclone.send(Handle::Panicked).ok();
-                        panic!("Buffer is too small.")
+                        panic!("couldn't read child stdout: {}", why.description())
                     }
                     Ok(0) => {
                         txclone.send(Handle::Zero).ok();
                         break;
+                    }
+                    Ok(BUFSIZE) => {
+                        txclone.send(Handle::Panicked).ok();
+                        panic!("Buffer is too small.")
                     }
                     Ok(n) => {
                         txclone.send(Handle::Valid(readbuf[0..n].to_owned())).ok();
                     }
                 }
             }
-        });
+        })
     }
 
-
-    fn write(&mut self, buf: &[u8]) {
+    fn send_bytes(&mut self, buf: &[u8]) -> Result<(), ProcessError> {
         let stdin = self.my_proc.stdin.as_mut().unwrap();
         match stdin.write_all(buf) {
-            Err(why) => panic!("couldn't write to child's stdin: {}", why.description()),
-            Ok(_) => {}
+            Ok(_) => Ok(()),
+            Err(why) => Err(ProcessError(why.description().to_owned())),
         }
+    }
+
+    fn kill(&mut self) {
+        self.my_proc.kill().unwrap();
+        let ac = self.killed.clone();
+        *(*ac).lock().unwrap() = true;
     }
 }
 
 // Destractor (kill proc)
 impl Drop for ProcHandler {
     fn drop(&mut self) {
-        match self.my_proc.kill() {
-            Ok(_) => println!("Killed Process"),
-            Err(_) => println!("SIGKILL failed"),
-        }
+        self.my_proc.kill().unwrap();
     }
 }
 
@@ -320,38 +480,48 @@ impl Drop for ProcHandler {
 mod tests {
     #[test]
     fn it_works() {
-        struct EmptyAI {};
         use Reactor;
         use ActionResult;
         use AsciiChar;
         use GameSetting;
         use LogType;
         use Severity;
+        use Duration;
+        struct EmptyAI {
+            loopnum: usize,
+        };
         impl Reactor for EmptyAI {
             fn action(&mut self, _screen: ActionResult, turn: usize) -> Option<Vec<u8>> {
                 let mut res = Vec::new();
-                if turn < 10 {
-                    res.push(b'h');
-                } else if turn == 10 {
-                    res.push(b'Q');
-                } else if turn == 11 {
-                    res.push(b'y');
-                } else if turn == 12 {
-                    res.push(AsciiChar::CarriageReturn.as_byte());
-                }
+                match turn {
+                    val if val == self.loopnum - 1 => res.push(AsciiChar::CarriageReturn.as_byte()),
+                    val if val == self.loopnum - 2 => res.push(b'y'),
+                    val if val == self.loopnum - 3 => res.push(b'Q'),
+                    _ => {
+                        let c = match (turn % 4) as u8 {
+                            0u8 => b'h',
+                            1u8 => b'j',
+                            2u8 => b'k',
+                            _ => b'l',
+                        };
+                        res.push(c);
+                    }
+                };
                 Some(res)
             }
             fn init(&mut self) {}
             fn end(&mut self) {}
         }
+        let loopnum = 50;
         let gs = GameSetting::new("rogue")
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
-            .max_loop(50);
+            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug)))
+            .max_loop(loopnum + 10)
+            .draw_on(Duration::from_millis(200));
         let game = gs.build();
-        let mut ai = EmptyAI {};
+        let mut ai = EmptyAI { loopnum: loopnum };
         game.play(&mut ai);
     }
 }
