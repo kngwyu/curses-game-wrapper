@@ -1,0 +1,4 @@
+* About
+This library is wrapper of curses games for AI making. What this crate provie is
+- Spawning CUI game as child process
+- Emulation of vt100 control sequence(helped by vte crate)
