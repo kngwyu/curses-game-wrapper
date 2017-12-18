@@ -192,8 +192,6 @@ impl Debug for ActionResult {
 
 pub trait Reactor {
     fn action(&mut self, screen: ActionResult, turn: usize) -> Option<Vec<u8>>;
-    fn init(&mut self);
-    fn end(&mut self);
 }
 
 pub struct GameEnv {
@@ -204,10 +202,8 @@ pub struct GameEnv {
     draw_type: DrawType,
 }
 impl GameEnv {
-    fn play<R: Reactor>(mut self, ai: &mut R) {
+    pub fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
-        ai.init();
-
         macro_rules! send_or {
             ($to:expr, $handle:expr) => (
                 if let Err(why) = $to.send_bytes($handle) {
@@ -267,7 +263,6 @@ impl GameEnv {
                 send_or!(self.process, &bytes);
             }
         }
-        ai.end();
         if !proc_dead {
             debug!(
                 self.term_data.logger,
@@ -275,6 +270,7 @@ impl GameEnv {
             );
             self.process.kill();
             send_or!(viewer, Handle::Zero);
+            let _ = ai.action(ActionResult::GameEnded, self.max_loop);
         }
         proc_handle.join().unwrap();
         viewer_handle.join().unwrap();
@@ -504,7 +500,7 @@ mod tests {
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
+            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug)))
             .max_loop(loopnum + 1)
             .draw_on(Duration::from_millis(200));
         let game = gs.build();
