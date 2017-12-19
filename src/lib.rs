@@ -463,13 +463,7 @@ impl Drop for ProcHandler {
 mod tests {
     #[test]
     fn it_works() {
-        use Reactor;
-        use ActionResult;
-        use AsciiChar;
-        use GameSetting;
-        use LogType;
-        use Severity;
-        use Duration;
+        use ::*;
         struct EmptyAI {
             loopnum: usize,
         };
@@ -492,8 +486,6 @@ mod tests {
                 };
                 Some(res)
             }
-            fn init(&mut self) {}
-            fn end(&mut self) {}
         }
         let loopnum = 50;
         let gs = GameSetting::new("rogue")
