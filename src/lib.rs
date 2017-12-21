@@ -166,29 +166,18 @@ pub enum ActionResult {
 }
 impl Debug for ActionResult {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        macro_rules! write_or {
-            ($fmt:expr) => (match write!(f, $fmt) {
-                Ok(_) => {}
-                Err(err) => return Err(err),
-            });
-            ($fmt:expr, $($arg:tt)*) => (match write!(f, $fmt, $($arg)*) {
-                Ok(_) => {}
-                Err(err) => return Err(err),
-            });
-        }
         match *self {
             ActionResult::Changed(ref buf) => {
-                write_or!("ActionResult::Changed\n");
-                write_or!("--------------------\n");
+                write!(f, "ActionResult::Changed\n")?;
+                write!(f, "--------------------\n")?;
                 for v in buf {
                     let s = str::from_utf8(v).unwrap();
-                    write_or!("{}\n", s);
+                    write!(f, "{}\n", s)?;
                 }
-                write_or!("--------------------\n");
-                Ok(())
+                write!(f, "--------------------")
             }
-            ActionResult::NotChanged => write!(f, "ActionResult::NotChanged\n"),
-            ActionResult::GameEnded => write!(f, "ActionResult::GameEnded\n"),
+            ActionResult::NotChanged => write!(f, "ActionResult::NotChanged"),
+            ActionResult::GameEnded => write!(f, "ActionResult::GameEnded"),
         }
     }
 }
@@ -304,6 +293,12 @@ impl Error for ViewerError {
         &self.0
     }
 }
+impl From<mpsc::SendError<Handle<Vec<u8>>>> for ViewerError {
+    fn from(e: mpsc::SendError<Handle<Vec<u8>>>) -> Self {
+        ViewerError(e.description().to_owned())
+    }
+}
+
 pub struct EmptyViewer {}
 
 impl GameViewer for EmptyViewer {
@@ -314,6 +309,7 @@ impl GameViewer for EmptyViewer {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 struct TerminalViewer {
     tx: mpsc::Sender<Handle<Vec<u8>>>,
@@ -359,23 +355,29 @@ impl GameViewer for TerminalViewer {
             Handle::Panicked => Handle::Panicked,
             Handle::Valid(b) => Handle::Valid(b.to_owned()),
         };
-        match txclone.send(res) {
-            Ok(_) => Ok(()),
-            Err(why) => Err(ViewerError(why.description().to_owned())),
-        }
+        txclone.send(res)?;
+        Ok(())
     }
 }
 
 #[derive(Debug)]
 pub struct ProcessError(String);
+
 impl fmt::Display for ProcessError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
+
 impl Error for ProcessError {
     fn description(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<io::Error> for ProcessError {
+    fn from(why: io::Error) -> Self {
+        ProcessError(why.description().to_owned())
     }
 }
 
@@ -442,10 +444,8 @@ impl ProcHandler {
 
     fn send_bytes(&mut self, buf: &[u8]) -> Result<(), ProcessError> {
         let stdin = self.my_proc.stdin.as_mut().unwrap();
-        match stdin.write_all(buf) {
-            Ok(_) => Ok(()),
-            Err(why) => Err(ProcessError(why.description().to_owned())),
-        }
+        stdin.write_all(buf)?;
+        Ok(())
     }
 
     fn kill(&mut self) {

@@ -8,6 +8,7 @@ use vte::Perform;
 use std::str;
 use std::default::Default;
 use std::cmp::min;
+use std::ascii::AsciiExt;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Cursor {
@@ -339,7 +340,9 @@ impl Perform for TermData {
     // draw
     fn print(&mut self, c: char) {
         trace!(self.logger, "(print) c: {:?} cursor: {:?}", c, self.cur);
-        assert!(c.is_ascii(), "Non Ascii char Input!");
+        if !c.is_ascii() {
+            warn!(self.logger, "Non Ascii char Input!");
+        }
         self.input(c as u8);
     }
     // C0orC1
