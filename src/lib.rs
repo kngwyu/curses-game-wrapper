@@ -40,11 +40,18 @@ pub use ascii::AsciiChar;
 /// This functionality is mainly for developper.
 #[derive(Clone, Debug)]
 pub enum LogType {
-    File((String, Severity)),
+    File((String, Severity, OpenMode)),
     Stdout(Severity),
     Stderr(Severity),
     None,
 }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OpenMode {
+    Truncate,
+    Append,
+}
+
 #[derive(Copy, Clone, Debug)]
 enum DrawType {
     Terminal(Duration),
@@ -207,7 +214,6 @@ impl GameEnv {
                 }
             )
         }
-
         let proc_handle = self.process.run();
         let mut viewer: Box<GameViewer> = match self.draw_type {
             DrawType::Terminal(d) => Box::new(TerminalViewer::new(d)),
@@ -495,9 +501,9 @@ mod tests {
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug)))
+            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug, OpenMode::Truncate)))
             .max_loop(loopnum + 1)
-            .draw_on(Duration::from_millis(200));
+            .draw_on(Duration::from_millis(100));
         let game = gs.build();
         let mut ai = EmptyAI { loopnum: loopnum };
         game.play(&mut ai);

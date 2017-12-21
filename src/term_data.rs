@@ -1,9 +1,9 @@
-use super::{GameSetting, LogType};
+use super::{GameSetting, LogType, OpenMode};
 use slog::Logger;
 use sloggers::Build;
 use sloggers::file::FileLoggerBuilder;
 use sloggers::null::NullLoggerBuilder;
-use sloggers::terminal::{TerminalLoggerBuilder, Destination};
+use sloggers::terminal::{Destination, TerminalLoggerBuilder};
 use vte::Perform;
 use std::str;
 use std::default::Default;
@@ -45,36 +45,36 @@ pub struct TermData {
 
 impl TermData {
     pub fn from_setting(s: &GameSetting) -> TermData {
-        TermData {
-            buf: vec![vec![b' '; s.columns]; s.lines],
-            cur: Cursor::default(),
-            height: s.lines,
-            width: s.columns,
-            mode: TermMode::default(),
-            scroll_range: LineRange(0, s.lines),
-            saved_cur: Cursor::default(),
-            logger: match s.debug_log {
-                        LogType::File((ref name, level)) => {
-                            FileLoggerBuilder::new(name).level(level).build()
-                        }
-                        LogType::Stdout(level) => {
-                            TerminalLoggerBuilder::new()
-                                .destination(Destination::Stdout)
-                                .level(level)
-                                .build()
-                        }
-                        LogType::Stderr(level) => {
-                            TerminalLoggerBuilder::new()
-                                .destination(Destination::Stderr)
-                                .level(level)
-                                .build()
-                        }
-                        LogType::None => NullLoggerBuilder {}.build(),
-                    }
-                    .ok()
-                    .unwrap(),
-            preceeding: None,
-        }
+        TermData { buf: vec![vec![b' '; s.columns]; s.lines],
+                   cur: Cursor::default(),
+                   height: s.lines,
+                   width: s.columns,
+                   mode: TermMode::default(),
+                   scroll_range: LineRange(0, s.lines),
+                   saved_cur: Cursor::default(),
+                   logger: match s.debug_log {
+                               LogType::File((ref name, level, open_mode)) => {
+                                   let mut builder = FileLoggerBuilder::new(name);
+                                   builder.level(level);
+                                   if open_mode == OpenMode::Truncate {
+                                       builder.truncate();
+                                   }
+                                   builder.build()
+                               }
+                               LogType::Stdout(level) => {
+                                   TerminalLoggerBuilder::new().destination(Destination::Stdout)
+                                                               .level(level)
+                                                               .build()
+                               }
+                               LogType::Stderr(level) => {
+                                   TerminalLoggerBuilder::new().destination(Destination::Stderr)
+                                                               .level(level)
+                                                               .build()
+                               }
+                               LogType::None => NullLoggerBuilder {}.build(),
+                           }.ok()
+                           .unwrap(),
+                   preceeding: None, }
     }
     pub fn ret_screen(&self) -> Vec<Vec<u8>> {
         self.buf.clone()
@@ -83,11 +83,9 @@ impl TermData {
         self.cur.y < self.height && self.cur.x < self.width
     }
     fn assert_cursor(&self) {
-        assert!(
-            self.is_cursor_valid(),
-            "Cursor has invalid val!, {:?}",
-            self.cur
-        );
+        assert!(self.is_cursor_valid(),
+                "Cursor has invalid val!, {:?}",
+                self.cur);
     }
     fn input(&mut self, c: u8) {
         while self.cur.x >= self.width {
@@ -151,13 +149,11 @@ impl TermData {
     }
     fn clear_scr(&mut self, mode: ClearMode) {
         match mode {
-            ClearMode::All => {
-                for i in 0..self.height {
-                    for j in 0..self.width {
-                        self.buf[i][j] = b' ';
-                    }
+            ClearMode::All => for i in 0..self.height {
+                for j in 0..self.width {
+                    self.buf[i][j] = b' ';
                 }
-            }
+            },
             ClearMode::Above => {
                 for i in 0..self.cur.y {
                     for j in 0..self.width {
@@ -184,21 +180,15 @@ impl TermData {
     }
     fn clear_line(&mut self, mode: LineClearMode) {
         match mode {
-            LineClearMode::Right => {
-                for i in self.cur.x..self.width {
-                    self.buf[self.cur.y][i] = b' ';
-                }
-            }
-            LineClearMode::Left => {
-                for i in 0..self.cur.x + 1 {
-                    self.buf[self.cur.y][i] = b' ';
-                }
-            }
-            LineClearMode::All => {
-                for i in 0..self.width {
-                    self.buf[self.cur.y][i] = b' ';
-                }
-            }
+            LineClearMode::Right => for i in self.cur.x..self.width {
+                self.buf[self.cur.y][i] = b' ';
+            },
+            LineClearMode::Left => for i in 0..self.cur.x + 1 {
+                self.buf[self.cur.y][i] = b' ';
+            },
+            LineClearMode::All => for i in 0..self.width {
+                self.buf[self.cur.y][i] = b' ';
+            },
         }
     }
     fn scroll_up(&mut self, num: usize) {
@@ -335,7 +325,6 @@ impl TermData {
     }
 }
 
-
 impl Perform for TermData {
     // draw
     fn print(&mut self, c: char) {
@@ -347,12 +336,10 @@ impl Perform for TermData {
     }
     // C0orC1
     fn execute(&mut self, byte: u8) {
-        trace!(
-            self.logger,
-            "(exectute) byte: {:?}({:x})",
-            byte as char,
-            byte
-        );
+        trace!(self.logger,
+               "(exectute) byte: {:?}({:x})",
+               byte as char,
+               byte);
         match byte {
             C0::BS => self.backspace(), // backspace
             C0::CR => self.carriage_return(),
@@ -371,31 +358,33 @@ impl Perform for TermData {
                 return;
             }}
         }
-        let args_or =
-            |id: usize, default: i64| -> i64 { if id >= args.len() { default } else { args[id] } };
-        trace!(
-            self.logger,
-            "(CSI) private = {:?}, action={:?}, args={:?}, intermediates={:?}",
-            private,
-            action,
-            args,
-            intermediates
-        );
+        let args_or = |id: usize, default: i64| -> i64 {
+            if id >= args.len() {
+                default
+            } else {
+                args[id]
+            }
+        };
+        trace!(self.logger,
+               "(CSI) private = {:?}, action={:?}, args={:?}, intermediates={:?}",
+               private,
+               action,
+               args,
+               intermediates);
         match action {
             '@' => self.insert_blank_chars(args_or(0, 1) as _),
             'A' => self.sub_y(args_or(0, 1) as _),
-            'b' => {
-                if let Some(c) = self.preceeding {
+            'b' => match self.preceeding {
+                Some(c) => {
                     for _ in 0..args_or(0, 1) {
                         self.input(c);
                     }
-                } else {
-                    warn!(self.logger, "Try repeating with No Precceding Char!");
                 }
-            }
+                None => warn!(self.logger, "Try repeating with No Precceding Char!"),
+            },
             'B' | 'e' => self.add_y(args_or(0, 1) as _), // move down
             'C' | 'a' => self.add_x(args_or(0, 1) as _), // move forward
-            'D' => self.sub_x(args_or(0, 1) as _), // move backward
+            'D' => self.sub_x(args_or(0, 1) as _),       // move backward
             'E' => {
                 // move down and CR
                 self.add_y(args_or(0, 1) as _);
@@ -476,14 +465,12 @@ impl Perform for TermData {
                 return;
             }}
         }
-        trace!(
-            self.logger,
-            "(ESC)  params={:?}, ints={:?}, byte={:?} ({:02x})",
-            params,
-            intermediates,
-            byte as char,
-            byte
-        );
+        trace!(self.logger,
+               "(ESC)  params={:?}, ints={:?}, byte={:?} ({:02x})",
+               params,
+               intermediates,
+               byte as char,
+               byte);
         match byte {
             b'D' => self.add_y(1),
             b'E' => {
@@ -508,20 +495,16 @@ impl Perform for TermData {
     }
     // unsupported now
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
-        debug!(
-            self.logger,
-            "[ignored! (osc_dispatch)]: {}",
-            str::from_utf8(params[0]).unwrap()
-        );
+        debug!(self.logger,
+               "[ignored! (osc_dispatch)]: {}",
+               str::from_utf8(params[0]).unwrap());
     }
     fn hook(&mut self, params: &[i64], intermediates: &[u8], ignore: bool) {
-        debug!(
-            self.logger,
-            "[unhandled! (hook)] params={:?}, ints: {:?}, ignore: {:?}",
-            params,
-            intermediates,
-            ignore
-        );
+        debug!(self.logger,
+               "[unhandled! (hook)] params={:?}, ints: {:?}, ignore: {:?}",
+               params,
+               intermediates,
+               ignore);
     }
     fn put(&mut self, byte: u8) {
         debug!(self.logger, "[unhandled! (put)] byte={:?}", byte);
@@ -530,7 +513,6 @@ impl Perform for TermData {
         debug!(self.logger, "[unhandled! (unhook)]");
     }
 }
-
 
 // below, from awesome https://github.com/jwilm/alacritty. Many thanks!
 bitflags! {
@@ -557,7 +539,6 @@ impl Default for TermMode {
         TermMode::SHOW_CURSOR | TermMode::LINE_WRAP
     }
 }
-
 
 /// Terminal modes
 #[derive(Debug, Eq, PartialEq)]
@@ -618,26 +599,26 @@ impl ModeInt {
     fn from_primitive(private: bool, num: i64) -> Option<ModeInt> {
         if private {
             Some(match num {
-                1 => ModeInt::CursorKeys,
-                3 => ModeInt::DECCOLM,
-                6 => ModeInt::Origin,
-                7 => ModeInt::LineWrap,
-                12 => ModeInt::BlinkingCursor,
-                25 => ModeInt::ShowCursor,
-                1000 => ModeInt::ReportMouseClicks,
-                1002 => ModeInt::ReportMouseMotion,
-                1004 => ModeInt::ReportFocusInOut,
-                1006 => ModeInt::SgrMouse,
-                1049 => ModeInt::SwapScreenAndSetRestoreCursor,
-                2004 => ModeInt::BracketedPaste,
-                _ => return None,
-            })
+                     1 => ModeInt::CursorKeys,
+                     3 => ModeInt::DECCOLM,
+                     6 => ModeInt::Origin,
+                     7 => ModeInt::LineWrap,
+                     12 => ModeInt::BlinkingCursor,
+                     25 => ModeInt::ShowCursor,
+                     1000 => ModeInt::ReportMouseClicks,
+                     1002 => ModeInt::ReportMouseMotion,
+                     1004 => ModeInt::ReportFocusInOut,
+                     1006 => ModeInt::SgrMouse,
+                     1049 => ModeInt::SwapScreenAndSetRestoreCursor,
+                     2004 => ModeInt::BracketedPaste,
+                     _ => return None,
+                 })
         } else {
             Some(match num {
-                4 => ModeInt::Insert,
-                20 => ModeInt::LineFeedNewLine,
-                _ => return None,
-            })
+                     4 => ModeInt::Insert,
+                     20 => ModeInt::LineFeedNewLine,
+                     _ => return None,
+                 })
         }
     }
 }
@@ -739,7 +720,6 @@ mod C0 {
     /// Delete, should be ignored by terminal
     pub const DEL: u8 = 0x7f;
 }
-
 
 /// C1 set of 8-bit control characters (from ANSI X3.64-1979)
 ///
