@@ -6,7 +6,7 @@ extern crate vte;
 extern crate slog;
 extern crate sloggers;
 #[macro_use]
-extern crate bitflags;
+  extern crate bitflags;
 extern crate ascii;
 
 mod term_data;
