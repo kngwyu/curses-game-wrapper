@@ -45,36 +45,36 @@ pub struct TermData {
 
 impl TermData {
     pub fn from_setting(s: &GameSetting) -> TermData {
-        TermData { buf: vec![vec![b' '; s.columns]; s.lines],
-                   cur: Cursor::default(),
-                   height: s.lines,
-                   width: s.columns,
-                   mode: TermMode::default(),
-                   scroll_range: LineRange(0, s.lines),
-                   saved_cur: Cursor::default(),
-                   logger: match s.debug_log {
-                               LogType::File((ref name, level, open_mode)) => {
-                                   let mut builder = FileLoggerBuilder::new(name);
-                                   builder.level(level);
-                                   if open_mode == OpenMode::Truncate {
-                                       builder.truncate();
-                                   }
-                                   builder.build()
-                               }
-                               LogType::Stdout(level) => {
-                                   TerminalLoggerBuilder::new().destination(Destination::Stdout)
-                                                               .level(level)
-                                                               .build()
-                               }
-                               LogType::Stderr(level) => {
-                                   TerminalLoggerBuilder::new().destination(Destination::Stderr)
-                                                               .level(level)
-                                                               .build()
-                               }
-                               LogType::None => NullLoggerBuilder {}.build(),
-                           }.ok()
-                           .unwrap(),
-                   preceeding: None, }
+        TermData {
+            buf: vec![vec![b' '; s.columns]; s.lines],
+            cur: Cursor::default(),
+            height: s.lines,
+            width: s.columns,
+            mode: TermMode::default(),
+            scroll_range: LineRange(0, s.lines),
+            saved_cur: Cursor::default(),
+            logger: match s.debug_log {
+                LogType::File((ref name, level, open_mode)) => {
+                    let mut builder = FileLoggerBuilder::new(name);
+                    builder.level(level);
+                    if open_mode == OpenMode::Truncate {
+                        builder.truncate();
+                    }
+                    builder.build()
+                }
+                LogType::Stdout(level) => TerminalLoggerBuilder::new()
+                    .destination(Destination::Stdout)
+                    .level(level)
+                    .build(),
+                LogType::Stderr(level) => TerminalLoggerBuilder::new()
+                    .destination(Destination::Stderr)
+                    .level(level)
+                    .build(),
+                LogType::None => NullLoggerBuilder {}.build(),
+            }.ok()
+                .unwrap(),
+            preceeding: None,
+        }
     }
     pub fn ret_screen(&self) -> Vec<Vec<u8>> {
         self.buf.clone()
@@ -83,9 +83,11 @@ impl TermData {
         self.cur.y < self.height && self.cur.x < self.width
     }
     fn assert_cursor(&self) {
-        assert!(self.is_cursor_valid(),
-                "Cursor has invalid val!, {:?}",
-                self.cur);
+        assert!(
+            self.is_cursor_valid(),
+            "Cursor has invalid val!, {:?}",
+            self.cur
+        );
     }
     fn input(&mut self, c: u8) {
         while self.cur.x >= self.width {
@@ -336,10 +338,12 @@ impl Perform for TermData {
     }
     // C0orC1
     fn execute(&mut self, byte: u8) {
-        trace!(self.logger,
-               "(exectute) byte: {:?}({:x})",
-               byte as char,
-               byte);
+        trace!(
+            self.logger,
+            "(exectute) byte: {:?}({:x})",
+            byte as char,
+            byte
+        );
         match byte {
             C0::BS => self.backspace(), // backspace
             C0::CR => self.carriage_return(),
@@ -365,21 +369,21 @@ impl Perform for TermData {
                 args[id]
             }
         };
-        trace!(self.logger,
-               "(CSI) private = {:?}, action={:?}, args={:?}, intermediates={:?}",
-               private,
-               action,
-               args,
-               intermediates);
+        trace!(
+            self.logger,
+            "(CSI) private = {:?}, action={:?}, args={:?}, intermediates={:?}",
+            private,
+            action,
+            args,
+            intermediates
+        );
         match action {
             '@' => self.insert_blank_chars(args_or(0, 1) as _),
             'A' => self.sub_y(args_or(0, 1) as _),
             'b' => match self.preceeding {
-                Some(c) => {
-                    for _ in 0..args_or(0, 1) {
-                        self.input(c);
-                    }
-                }
+                Some(c) => for _ in 0..args_or(0, 1) {
+                    self.input(c);
+                },
                 None => warn!(self.logger, "Try repeating with No Precceding Char!"),
             },
             'B' | 'e' => self.add_y(args_or(0, 1) as _), // move down
@@ -465,12 +469,14 @@ impl Perform for TermData {
                 return;
             }}
         }
-        trace!(self.logger,
-               "(ESC)  params={:?}, ints={:?}, byte={:?} ({:02x})",
-               params,
-               intermediates,
-               byte as char,
-               byte);
+        trace!(
+            self.logger,
+            "(ESC)  params={:?}, ints={:?}, byte={:?} ({:02x})",
+            params,
+            intermediates,
+            byte as char,
+            byte
+        );
         match byte {
             b'D' => self.add_y(1),
             b'E' => {
@@ -495,16 +501,20 @@ impl Perform for TermData {
     }
     // unsupported now
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
-        debug!(self.logger,
-               "[ignored! (osc_dispatch)]: {}",
-               str::from_utf8(params[0]).unwrap());
+        debug!(
+            self.logger,
+            "[ignored! (osc_dispatch)]: {}",
+            str::from_utf8(params[0]).unwrap()
+        );
     }
     fn hook(&mut self, params: &[i64], intermediates: &[u8], ignore: bool) {
-        debug!(self.logger,
-               "[unhandled! (hook)] params={:?}, ints: {:?}, ignore: {:?}",
-               params,
-               intermediates,
-               ignore);
+        debug!(
+            self.logger,
+            "[unhandled! (hook)] params={:?}, ints: {:?}, ignore: {:?}",
+            params,
+            intermediates,
+            ignore
+        );
     }
     fn put(&mut self, byte: u8) {
         debug!(self.logger, "[unhandled! (put)] byte={:?}", byte);
@@ -599,26 +609,26 @@ impl ModeInt {
     fn from_primitive(private: bool, num: i64) -> Option<ModeInt> {
         if private {
             Some(match num {
-                     1 => ModeInt::CursorKeys,
-                     3 => ModeInt::DECCOLM,
-                     6 => ModeInt::Origin,
-                     7 => ModeInt::LineWrap,
-                     12 => ModeInt::BlinkingCursor,
-                     25 => ModeInt::ShowCursor,
-                     1000 => ModeInt::ReportMouseClicks,
-                     1002 => ModeInt::ReportMouseMotion,
-                     1004 => ModeInt::ReportFocusInOut,
-                     1006 => ModeInt::SgrMouse,
-                     1049 => ModeInt::SwapScreenAndSetRestoreCursor,
-                     2004 => ModeInt::BracketedPaste,
-                     _ => return None,
-                 })
+                1 => ModeInt::CursorKeys,
+                3 => ModeInt::DECCOLM,
+                6 => ModeInt::Origin,
+                7 => ModeInt::LineWrap,
+                12 => ModeInt::BlinkingCursor,
+                25 => ModeInt::ShowCursor,
+                1000 => ModeInt::ReportMouseClicks,
+                1002 => ModeInt::ReportMouseMotion,
+                1004 => ModeInt::ReportFocusInOut,
+                1006 => ModeInt::SgrMouse,
+                1049 => ModeInt::SwapScreenAndSetRestoreCursor,
+                2004 => ModeInt::BracketedPaste,
+                _ => return None,
+            })
         } else {
             Some(match num {
-                     4 => ModeInt::Insert,
-                     20 => ModeInt::LineFeedNewLine,
-                     _ => return None,
-                 })
+                4 => ModeInt::Insert,
+                20 => ModeInt::LineFeedNewLine,
+                _ => return None,
+            })
         }
     }
 }

@@ -1,22 +1,22 @@
-#![cfg_attr(feature="clippy", feature(plugin))]
-#![cfg_attr(feature="clippy", plugin(clippy))]
+#![cfg_attr(feature = "clippy", feature(plugin))]
+#![cfg_attr(feature = "clippy", plugin(clippy))]
 
-extern crate vte;
+extern crate ascii;
+#[macro_use]
+extern crate bitflags;
 #[macro_use]
 extern crate slog;
 extern crate sloggers;
-#[macro_use]
-  extern crate bitflags;
-extern crate ascii;
+extern crate vte;
 
 mod term_data;
 
 use term_data::TermData;
-use std::process::{Command, Stdio, Child};
-use std::io::{Read, Write, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::io::{BufReader, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::str;
 use std::error::Error;
@@ -228,33 +228,29 @@ impl GameEnv {
                 break;
             }
             let action_res = match self.process.rx.recv_timeout(self.timeout) {
-                Ok(rec) => {
-                    match rec {
-                        Handle::Panicked => {
-                            send_or!(viewer, Handle::Panicked);
-                            panic!("panicked in child thread")
-                        }
-                        Handle::Zero => {
-                            debug!(self.term_data.logger, "read zero bytes");
-                            send_or!(viewer, Handle::Zero);
-                            proc_dead = true;
-                            ActionResult::GameEnded
-                        }
-                        Handle::Valid(ref r) => {
-                            send_or!(viewer, Handle::Valid(r));
-                            for c in r {
-                                parser.advance(&mut self.term_data, *c);
-                            }
-                            ActionResult::Changed(self.term_data.ret_screen())
-                        }
+                Ok(rec) => match rec {
+                    Handle::Panicked => {
+                        send_or!(viewer, Handle::Panicked);
+                        panic!("panicked in child thread")
                     }
-                }
-                Err(err) => {
-                    match err {
-                        RecvTimeoutError::Timeout => ActionResult::NotChanged,
-                        RecvTimeoutError::Disconnected => panic!("disconnected"),
+                    Handle::Zero => {
+                        debug!(self.term_data.logger, "read zero bytes");
+                        send_or!(viewer, Handle::Zero);
+                        proc_dead = true;
+                        ActionResult::GameEnded
                     }
-                }
+                    Handle::Valid(ref r) => {
+                        send_or!(viewer, Handle::Valid(r));
+                        for c in r {
+                            parser.advance(&mut self.term_data, *c);
+                        }
+                        ActionResult::Changed(self.term_data.ret_screen())
+                    }
+                },
+                Err(err) => match err {
+                    RecvTimeoutError::Timeout => ActionResult::NotChanged,
+                    RecvTimeoutError::Disconnected => panic!("disconnected"),
+                },
             };
             trace!(self.term_data.logger, "{:?}, turn: {}", action_res, i);
             if let Some(bytes) = ai.action(action_res, i) {
@@ -278,7 +274,7 @@ impl GameEnv {
 // handles Sender and Reciever
 enum Handle<T> {
     Panicked, // thread panicked
-    Zero, // read 0 bytes (probably game ended)
+    Zero,     // read 0 bytes (probably game ended)
     Valid(T), // read 1 or more bytes
 }
 
@@ -501,7 +497,11 @@ mod tests {
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Debug, OpenMode::Truncate)))
+            .debug_type(LogType::File((
+                "debug.txt".to_owned(),
+                Severity::Debug,
+                OpenMode::Truncate,
+            )))
             .max_loop(loopnum + 1)
             .draw_on(Duration::from_millis(100));
         let game = gs.build();
