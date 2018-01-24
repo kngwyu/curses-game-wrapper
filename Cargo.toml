@@ -8,6 +8,7 @@ bitflags = "1.0.1"
 vte = "0.3.2"
 sloggers = "0.2.4"
 clippy = {version = "*", optional = true}
+ctrlc = "3.1.0"
 
 [dependencies.slog]
 features = ["max_level_trace", "release_max_level_warn"]

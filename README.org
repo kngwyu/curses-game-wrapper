@@ -4,13 +4,12 @@ This library is wrapper of curses games for AI making. What this crate provie is
 - Emulation of vt100 control sequence(helped by vte crate)
 * Usage 
 #+BEGIN_SRC Rust
-extern crate curses_game_wrapper;
-use curses_game_wrapper::{Reactor, ActioResult, AsciiChar, GameSetting, LogType, Severity};
-use std::time::Duration;
-struct EmptyAI {
-    loopnum: usize,
-};
+extern crate curses_game_wrapper as cgw;
+use cgw::{Reactor, ActioResult, AsciiChar, GameSetting, Severity};
 fn main() {
+    struct EmptyAI {
+        loopnum: usize,
+    };
     impl Reactor for EmptyAI {
         fn action(&mut self, _screen: ActionResult, turn: usize) -> Option<Vec<u8>> {
             let mut res = Vec::new();
@@ -30,19 +29,22 @@ fn main() {
             };
             Some(res)
         }
-        fn init(&mut self) {}
-        fn end(&mut self) {}
     }
     let loopnum = 50;
     let gs = GameSetting::new("rogue")
         .env("ROGUEUSER", "EmptyAI")
         .lines(24)
         .columns(80)
-        .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
+        .debug_file("debug.txt")
         .max_loop(loopnum + 1)
-        .draw_on(Duration::from_millis(200));
+        .draw_on(Duration::from_millis(100));
     let game = gs.build();
     let mut ai = EmptyAI { loopnum: loopnum };
     game.play(&mut ai);
 }
+#+END_SRC
+
+You can run above code by 
+#+BEGIN_SRC bash
+cargo test -- --nocapture
 #+END_SRC

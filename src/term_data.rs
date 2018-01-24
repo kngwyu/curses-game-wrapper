@@ -1,4 +1,4 @@
-use super::{GameSetting, LogType, OpenMode};
+use super::GameSetting;
 use slog::Logger;
 use sloggers::Build;
 use sloggers::file::FileLoggerBuilder;
@@ -53,24 +53,13 @@ impl TermData {
             mode: TermMode::default(),
             scroll_range: LineRange(0, s.lines),
             saved_cur: Cursor::default(),
-            logger: match s.debug_log {
-                LogType::File((ref name, level, open_mode)) => {
-                    let mut builder = FileLoggerBuilder::new(name);
-                    builder.level(level);
-                    if open_mode == OpenMode::Truncate {
-                        builder.truncate();
-                    }
-                    builder.build()
-                }
-                LogType::Stdout(level) => TerminalLoggerBuilder::new()
-                    .destination(Destination::Stdout)
-                    .level(level)
-                    .build(),
-                LogType::Stderr(level) => TerminalLoggerBuilder::new()
-                    .destination(Destination::Stderr)
-                    .level(level)
-                    .build(),
-                LogType::None => NullLoggerBuilder {}.build(),
+            logger: if !s.log_info.fname.is_empty() {
+                let mut builder = FileLoggerBuilder::new(&s.log_info.fname);
+                builder.level(s.log_info.sev);
+                builder.truncate();
+                builder.build()
+            } else {
+                NullLoggerBuilder {}.build()
             }.ok()
                 .unwrap(),
             preceeding: None,

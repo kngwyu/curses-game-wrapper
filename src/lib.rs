@@ -1,3 +1,52 @@
+//! This crate is wrapper of curses games like rogue and nethack, for AI making.
+//!
+//! What this crate provie is spawning CUI game as child process and emulation of vt100 control sequence(helped by vte crate).
+//!
+//! To run AI, You have to implement ```Reactor``` trait to your AI object.
+//! The result of vt100 emulation are stored as ```Vec<Vec<u8>>``` and AI recieves it as ```Changed(Vec<Vec<u8>>)```.
+//! # Examples
+//! ```
+//! extern crate curses_game_wrapper as cgw;
+//! use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
+//! use std::time::Duration;
+//! fn main() {
+//!     struct EmptyAI {
+//!         loopnum: usize,
+//!     };
+//!     impl Reactor for EmptyAI {
+//!         fn action(&mut self, _screen: ActionResult, turn: usize) -> Option<Vec<u8>> {
+//!             let mut res = Vec::new();
+//!             match turn {
+//!                 val if val == self.loopnum - 1 => res.push(AsciiChar::CarriageReturn.as_byte()),
+//!                 val if val == self.loopnum - 2 => res.push(b'y'),
+//!                 val if val == self.loopnum - 3 => res.push(b'Q'),
+//!                 _ => {
+//!                     let c = match (turn % 4) as u8 {
+//!                         0u8 => b'h',
+//!                         1u8 => b'j',
+//!                         2u8 => b'k',
+//!                         _ => b'l',
+//!                     };
+//!                     res.push(c);
+//!                 }
+//!             };
+//!             Some(res)
+//!         }
+//!     }
+//!     let loopnum = 50;
+//!     let gs = GameSetting::new("rogue")
+//!         .env("ROGUEUSER", "EmptyAI")
+//!         .lines(24)
+//!         .columns(80)
+//!         .debug_file("debug.txt")
+//!         .max_loop(loopnum + 1)
+//!         .draw_on(Duration::from_millis(200));
+//!     let game = gs.build();
+//!     let mut ai = EmptyAI { loopnum: loopnum };
+//!     game.play(&mut ai);
+//! }
+//! ```
+
 #![cfg_attr(feature = "clippy", feature(plugin))]
 #![cfg_attr(feature = "clippy", plugin(clippy))]
 
@@ -25,31 +74,22 @@ use std::fmt::{self, Debug, Formatter};
 use std::io;
 use vte::Parser;
 pub use sloggers::types::Severity;
+/// It's imported from ```ascii``` crate for convinience.
 pub use ascii::AsciiChar;
-// sloggers::types::Severity
-// pub enum Severity {
-//     Trace,
-//     Debug,
-//     Info,
-//     Warning,
-//     Error,
-//     Critical,
-// }
 
-/// You can choose LogType of wrapper.
-/// This functionality is mainly for developper.
 #[derive(Clone, Debug)]
-pub enum LogType {
-    File((String, Severity, OpenMode)),
-    Stdout(Severity),
-    Stderr(Severity),
-    None,
+struct LogInfo {
+    fname: String,
+    sev: Severity,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum OpenMode {
-    Truncate,
-    Append,
+impl Default for LogInfo {
+    fn default() -> LogInfo {
+        LogInfo {
+            fname: String::new(),
+            sev: Severity::Debug,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -60,22 +100,27 @@ enum DrawType {
 
 /// Game process builder, providing control over how a new process
 /// should be spawned.
-/// Like std::process::Command struct, A default configuration can be
+///
+/// Like ```std::process::Command```, A default configuration can be
 /// generated using Gamesetting::new(command name) and other settings
-/// can be added by builder methods
-/// '''
-/// let loopnum = 50;
-/// let gs = GameSetting::new("rogue")
-///     .env("ROGUEUSER", "EmptyAI")
-///     .lines(24)
-///     .columns(80)
-///     .debug_type(LogType::File(("debug.txt".to_owned(), Severity::Trace)))
-///     .max_loop(loopnum + 10)
-///     .draw_on(Duration::from_millis(200));
-/// let game = gs.build();
-/// let mut my_ai = EmptyAI { loopnum: loopnum };
-/// game.play(&mut ai);
-/// '''
+/// can be added by builder methods.
+/// # Example
+/// ```
+/// extern crate curses_game_wrapper as cgw;
+/// use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
+/// use std::time::Duration;
+/// fn main() {
+///     let loopnum = 50;
+///     let gs = GameSetting::new("rogue")
+///         .env("ROGUEUSER", "EmptyAI")
+///         .lines(24)
+///         .columns(80)
+///         .debug_file("debug.txt")
+///         .max_loop(loopnum + 1)
+///         .draw_on(Duration::from_millis(200));
+///     let game = gs.build();
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct GameSetting<'a> {
     cmdname: String,
@@ -83,12 +128,13 @@ pub struct GameSetting<'a> {
     columns: usize,
     envs: Vec<(&'a str, &'a str)>,
     args: Vec<&'a str>,
-    debug_log: LogType,
+    log_info: LogInfo,
     timeout: Duration,
     draw_type: DrawType,
     max_loop: usize,
 }
 impl<'a> GameSetting<'a> {
+    /// Build GameSetting object with command name(like ```rogue```).
     pub fn new(command_name: &str) -> Self {
         GameSetting {
             cmdname: String::from(command_name),
@@ -96,28 +142,33 @@ impl<'a> GameSetting<'a> {
             columns: 80,
             envs: Vec::new(),
             args: Vec::new(),
-            debug_log: LogType::None,
+            log_info: LogInfo::default(),
             timeout: Duration::from_millis(100),
             draw_type: DrawType::Null,
-            max_loop: 100000,
+            max_loop: 100,
         }
     }
+    /// Set screen width of curses widow
     pub fn columns(mut self, u: usize) -> Self {
         self.columns = u;
         self
     }
+    /// Set screen height of curses window
     pub fn lines(mut self, u: usize) -> Self {
         self.lines = u;
         self
     }
+    /// Add command line argument
     pub fn arg(mut self, s: &'a str) -> Self {
         self.args.push(s);
         self
     }
+    /// Set environmental variable
     pub fn env(mut self, s: &'a str, t: &'a str) -> Self {
         self.envs.push((s, t));
         self
     }
+    /// Set multiple command line arguments
     pub fn args<I>(mut self, i: I) -> Self
     where
         I: IntoIterator<Item = &'a str>,
@@ -126,6 +177,7 @@ impl<'a> GameSetting<'a> {
         self.args = v;
         self
     }
+    /// Set multiple environmental variables
     pub fn envs<I>(mut self, i: I) -> Self
     where
         I: IntoIterator<Item = (&'a str, &'a str)>,
@@ -134,22 +186,37 @@ impl<'a> GameSetting<'a> {
         self.envs = v;
         self
     }
+    /// Draw game on terminal(Default: off).
+    /// You hanve to set duration of drawing.
     pub fn draw_on(mut self, d: Duration) -> Self {
         self.draw_type = DrawType::Terminal(d);
         self
     }
-    pub fn debug_type(mut self, l: LogType) -> Self {
-        self.debug_log = l;
+    /// You can set debug file of this crate.
+    /// This is mainly for developper of this crate:)
+    pub fn debug_file(mut self, s: &str) -> Self {
+        self.log_info.fname = s.to_owned();
         self
     }
+    /// You can set debug level of this crate.
+    /// This is mainly for developper of this crate:)
+    pub fn severity(mut self, s: Severity) -> Self {
+        self.log_info.sev = s;
+        self
+    }
+    /// You can set timeout to game output.
+    /// It's setted to 0.1s by default.
     pub fn timeout(mut self, d: Duration) -> Self {
         self.timeout = d;
         self
     }
+    /// You can set max_loop of game.
+    /// It's setted to 100 by default.
     pub fn max_loop(mut self, t: usize) -> Self {
         self.max_loop = t;
         self
     }
+    /// Consume game setting and build GameEnv
     pub fn build(self) -> GameEnv {
         let dat = TermData::from_setting(&self);
         let t = self.timeout;
@@ -165,6 +232,8 @@ impl<'a> GameSetting<'a> {
     }
 }
 
+/// Result of the game action.
+/// ```Changed(Vec<Vec<u8>>)``` contains virtual terminal as buffer.
 #[derive(Clone)]
 pub enum ActionResult {
     Changed(Vec<Vec<u8>>),
@@ -189,10 +258,38 @@ impl Debug for ActionResult {
     }
 }
 
+/// You have to implement ```Reactor``` for your AI to work.
 pub trait Reactor {
-    fn action(&mut self, screen: ActionResult, turn: usize) -> Option<Vec<u8>>;
+    fn action(&mut self, action_result: ActionResult, turn: usize) -> Option<Vec<u8>>;
 }
 
+/// This is for spawning curses game as child process.
+///
+/// The only usage is
+/// # Example
+/// ```
+/// extern crate curses_game_wrapper as cgw;
+/// use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
+/// use std::time::Duration;
+/// fn main() {
+///     struct EmptyAI;
+///     impl Reactor for EmptyAI {
+///         fn action(&mut self, _screen: ActionResult, _turn: usize) -> Option<Vec<u8>> {
+///              None
+///         }
+///     }
+///     let gs = GameSetting::new("rogue")
+///         .env("ROGUEUSER", "EmptyAI")
+///         .lines(24)
+///         .columns(80)
+///         .debug_file("debug.txt")
+///         .max_loop(10)
+///         .draw_on(Duration::from_millis(200));
+///     let game = gs.build();
+///     let mut ai = EmptyAI { };
+///     game.play(&mut ai);
+/// }
+/// ```
 pub struct GameEnv {
     process: ProcHandler,
     term_data: TermData,
@@ -201,6 +298,7 @@ pub struct GameEnv {
     draw_type: DrawType,
 }
 impl GameEnv {
+    /// Start process and run AI
     pub fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
         macro_rules! send_or {
@@ -301,7 +399,7 @@ impl From<mpsc::SendError<Handle<Vec<u8>>>> for ViewerError {
     }
 }
 
-pub struct EmptyViewer {}
+struct EmptyViewer {}
 
 impl GameViewer for EmptyViewer {
     fn run(&mut self) -> JoinHandle<()> {
@@ -363,7 +461,7 @@ impl GameViewer for TerminalViewer {
 }
 
 #[derive(Debug)]
-pub struct ProcessError(String);
+struct ProcessError(String);
 
 impl fmt::Display for ProcessError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -497,11 +595,7 @@ mod tests {
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)
             .columns(80)
-            .debug_type(LogType::File((
-                "debug.txt".to_owned(),
-                Severity::Debug,
-                OpenMode::Truncate,
-            )))
+            .debug_file("debug.txt")
             .max_loop(loopnum + 1)
             .draw_on(Duration::from_millis(100));
         let game = gs.build();
