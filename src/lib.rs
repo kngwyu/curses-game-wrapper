@@ -200,7 +200,7 @@ impl<'a> GameSetting<'a> {
     }
     /// You can set debug level of this crate.
     /// This is mainly for developper of this crate:)
-    pub fn severity(mut self, s: Severity) -> Self {
+    pub fn debug_level(mut self, s: Severity) -> Self {
         self.log_info.sev = s;
         self
     }
