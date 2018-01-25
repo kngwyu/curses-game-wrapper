@@ -63,7 +63,6 @@ mod term_data;
 use term_data::TermData;
 use std::process::{Child, Command, Stdio};
 use std::env;
-use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,6 +75,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::io;
 use vte::Parser;
 pub use sloggers::types::Severity;
+
 /// It's imported from ```ascii``` crate for convinience.
 pub use ascii::AsciiChar;
 
@@ -175,7 +175,7 @@ impl<'a> GameSetting<'a> {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let v: Vec<_> = i.into_iter().map(|x| x).collect();
+        let v: Vec<_> = i.into_iter().collect();
         self.args = v;
         self
     }
@@ -184,7 +184,7 @@ impl<'a> GameSetting<'a> {
     where
         I: IntoIterator<Item = (&'a str, &'a str)>,
     {
-        let v: Vec<_> = i.into_iter().map(|(s, t)| (s, t)).collect();
+        let v: Vec<_> = i.into_iter().collect();
         self.envs = v;
         self
     }
