@@ -62,6 +62,8 @@ mod term_data;
 
 use term_data::TermData;
 use std::process::{Child, Command, Stdio};
+use std::env;
+use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -432,6 +434,7 @@ impl GameViewer for TerminalViewer {
     fn run(&mut self) -> JoinHandle<()> {
         let rx = Arc::clone(&self.rx);
         let sleep = Arc::clone(&self.sleep_time);
+        env::set_var("TERM", "vt100");
         thread::spawn(move || {
             let receiver = rx.lock().unwrap();
             while let Ok(game_input) = (*receiver).recv() {
