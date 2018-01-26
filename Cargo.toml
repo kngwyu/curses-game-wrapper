@@ -10,7 +10,7 @@ ascii = "0.8.6"
 bitflags = "1.0.1"
 vte = "0.3.2"
 sloggers = "0.2.4"
-clippy = {version = "*", optional = true}
+clippy = {version = "0.0.182", optional = true}
 termion = "1.5.1"
 
 [dependencies.slog]
