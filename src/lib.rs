@@ -62,35 +62,23 @@ extern crate vte;
 
 mod term_data;
 
-<<<<<<< HEAD
 /// It's imported from ```ascii``` crate for convinience.
 pub use ascii::AsciiChar;
 pub use sloggers::types::Severity;
 use std::error::Error;
 use std::fmt::{self, Debug, Formatter};
 use std::io;
-=======
 use term_data::TermData;
 use std::process::{Child, Command, Stdio};
 use std::env;
->>>>>>> cac6adb36dcc22c8bcebdca1ec49592f27674469
 use std::io::{BufReader, Read, Write};
-use std::process::{Child, Command, Stdio};
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use term_data::TermData;
 use vte::Parser;
-<<<<<<< HEAD
-=======
-pub use sloggers::types::Severity;
-
-/// It's imported from ```ascii``` crate for convinience.
-pub use ascii::AsciiChar;
->>>>>>> cac6adb36dcc22c8bcebdca1ec49592f27674469
 
 #[derive(Clone, Debug)]
 struct LogInfo {
