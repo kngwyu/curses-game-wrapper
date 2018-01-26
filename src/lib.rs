@@ -62,12 +62,18 @@ extern crate vte;
 
 mod term_data;
 
+<<<<<<< HEAD
 /// It's imported from ```ascii``` crate for convinience.
 pub use ascii::AsciiChar;
 pub use sloggers::types::Severity;
 use std::error::Error;
 use std::fmt::{self, Debug, Formatter};
 use std::io;
+=======
+use term_data::TermData;
+use std::process::{Child, Command, Stdio};
+use std::env;
+>>>>>>> cac6adb36dcc22c8bcebdca1ec49592f27674469
 use std::io::{BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::str;
@@ -78,6 +84,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use term_data::TermData;
 use vte::Parser;
+<<<<<<< HEAD
+=======
+pub use sloggers::types::Severity;
+
+/// It's imported from ```ascii``` crate for convinience.
+pub use ascii::AsciiChar;
+>>>>>>> cac6adb36dcc22c8bcebdca1ec49592f27674469
 
 #[derive(Clone, Debug)]
 struct LogInfo {
@@ -175,7 +188,7 @@ impl<'a> GameSetting<'a> {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let v: Vec<_> = i.into_iter().map(|x| x).collect();
+        let v: Vec<_> = i.into_iter().collect();
         self.args = v;
         self
     }
@@ -184,7 +197,7 @@ impl<'a> GameSetting<'a> {
     where
         I: IntoIterator<Item = (&'a str, &'a str)>,
     {
-        let v: Vec<_> = i.into_iter().map(|(s, t)| (s, t)).collect();
+        let v: Vec<_> = i.into_iter().collect();
         self.envs = v;
         self
     }
@@ -453,6 +466,7 @@ impl GameViewer for TerminalViewer {
     fn run(&mut self) -> JoinHandle<()> {
         let rx = Arc::clone(&self.rx);
         let sleep = Arc::clone(&self.sleep_time);
+        env::set_var("TERM", "vt100");
         thread::spawn(move || {
             let receiver = rx.lock().unwrap();
             while let Ok(game_input) = (*receiver).recv() {

@@ -3,12 +3,10 @@ use slog::Logger;
 use sloggers::Build;
 use sloggers::file::FileLoggerBuilder;
 use sloggers::null::NullLoggerBuilder;
-use sloggers::terminal::{Destination, TerminalLoggerBuilder};
 use vte::Perform;
 use std::str;
 use std::default::Default;
 use std::cmp::min;
-use std::ascii::AsciiExt;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Cursor {
