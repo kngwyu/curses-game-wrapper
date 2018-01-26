@@ -2,6 +2,9 @@
 authors = ["kngwyu <yuji.kngw.80s.revive@gmail.com>"]
 name = "curses-game-wrapper"
 version = "0.0.1"
+license = "MIT"
+readme = "README.org"
+description = "wrapper for curses games to make game AI"
 [dependencies]
 ascii = "0.8.6"
 bitflags = "1.0.1"
