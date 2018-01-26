@@ -1,10 +1,11 @@
 //! This crate is wrapper of curses games like rogue and nethack, for AI making.
 //!
-//! What this crate provie is spawning CUI game as child process and emulation of vt100 control sequence(helped by vte crate).
+//! What this crate provie is spawning CUI game as child process and emulation of vt100 control
+//! sequence(helped by vte crate).
 //!
 //! To run AI, You have to implement ```Reactor``` trait to your AI object.
-//! The result of vt100 emulation are stored as ```Vec<Vec<u8>>``` and AI recieves it as ```Changed(Vec<Vec<u8>>)```.
-//! # Examples
+//! The result of vt100 emulation are stored as ```Vec<Vec<u8>>``` and AI recieves it as
+//! ```Changed(Vec<Vec<u8>>)```. # Examples
 //! ```
 //! extern crate curses_game_wrapper as cgw;
 //! use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
@@ -60,22 +61,22 @@ extern crate vte;
 
 mod term_data;
 
-use term_data::TermData;
-use std::process::{Child, Command, Stdio};
+/// It's imported from ```ascii``` crate for convinience.
+pub use ascii::AsciiChar;
+pub use sloggers::types::Severity;
+use std::error::Error;
+use std::fmt::{self, Debug, Formatter};
+use std::io;
 use std::io::{BufReader, Read, Write};
+use std::process::{Child, Command, Stdio};
+use std::str;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
-use std::str;
-use std::error::Error;
 use std::time::Duration;
-use std::fmt::{self, Debug, Formatter};
-use std::io;
+use term_data::TermData;
 use vte::Parser;
-pub use sloggers::types::Severity;
-/// It's imported from ```ascii``` crate for convinience.
-pub use ascii::AsciiChar;
 
 #[derive(Clone, Debug)]
 struct LogInfo {
@@ -265,6 +266,8 @@ pub trait Reactor {
 
 /// This is for spawning curses game as child process.
 ///
+/// It stores inputs from the game and sends result to AI when its input handler timeouts.
+///
 /// The only usage is
 /// # Example
 /// ```
@@ -298,7 +301,8 @@ pub struct GameEnv {
     draw_type: DrawType,
 }
 impl GameEnv {
-    /// Start process and run AI
+    /// Start process and run AI.
+    /// 
     pub fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
         macro_rules! send_or {
@@ -320,7 +324,15 @@ impl GameEnv {
         let viewer_handle = viewer.run();
         let mut parser = Parser::new();
         let mut proc_dead = false;
+        let mut stored_map = None;
         for i in 0..self.max_loop {
+            macro_rules! do_action {
+                ($act:expr) => {
+                    if let Some(bytes) = ai.action($act, i) {
+                        send_or!(self.process, &bytes);
+                    }
+                }
+            }
             if proc_dead {
                 trace!(self.term_data.logger, "Game ended in turn {}", i - 1);
                 break;
@@ -351,8 +363,16 @@ impl GameEnv {
                 },
             };
             trace!(self.term_data.logger, "{:?}, turn: {}", action_res, i);
-            if let Some(bytes) = ai.action(action_res, i) {
-                send_or!(self.process, &bytes);
+            match action_res {
+                ActionResult::GameEnded => do_action!(ActionResult::GameEnded),
+                // store inputs until timeout occurs
+                ActionResult::Changed(map) => stored_map = Some(map),
+                ActionResult::NotChanged => if let Some(map) = stored_map {
+                    do_action!(ActionResult::Changed(map));
+                    stored_map = None;
+                } else {
+                    do_action!(ActionResult::NotChanged);
+                },
             }
         }
         if !proc_dead {
@@ -496,7 +516,7 @@ impl ProcHandler {
         let cmd = cmd.args(g.args);
         let cmd = cmd.env("LINES", format!("{}", g.lines));
         let cmd = cmd.env("COLUMNS", format!("{}", g.columns));
-        let cmd = cmd.env("TERM", "vt100"); //You can override it by env
+        let cmd = cmd.env("TERM", "vt100"); // You can override it by env
         let cmd = cmd.envs(g.envs);
         let cmd = cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
         let process = match cmd.spawn() {
