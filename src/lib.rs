@@ -5,7 +5,8 @@
 //!
 //! To run AI, You have to implement ```Reactor``` trait to your AI object.
 //! The result of vt100 emulation are stored as ```Vec<Vec<u8>>``` and AI recieves it as
-//! ```Changed(Vec<Vec<u8>>)```. # Examples
+//! ```Changed(Vec<Vec<u8>>)```.
+//! # Examples
 //! ```
 //! extern crate curses_game_wrapper as cgw;
 //! use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
@@ -302,7 +303,7 @@ pub struct GameEnv {
 }
 impl GameEnv {
     /// Start process and run AI.
-    /// 
+    ///
     pub fn play<R: Reactor>(mut self, ai: &mut R) {
         use mpsc::RecvTimeoutError;
         macro_rules! send_or {

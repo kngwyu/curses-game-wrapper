@@ -1,9 +1,13 @@
-* About
+# About
+[![Crates.io](http://meritbadge.herokuapp.com/curses-game-wrapper)](https://crates.io/crates/curses-game-wrapper)
+[![Documentation](https://docs.rs/curses-game-wrapper/badge.svg)](https://docs.rs/curses-game-wrapper)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 This library is wrapper of curses games for AI making. What this crate provie is
 - Spawning CUI game as child process
 - Emulation of vt100 control sequence(helped by vte crate)
-* Usage 
-#+BEGIN_SRC Rust
+# Usage 
+
+``` rust
 extern crate curses_game_wrapper as cgw;
 use cgw::{Reactor, ActioResult, AsciiChar, GameSetting, Severity};
 fn main() {
@@ -42,9 +46,11 @@ fn main() {
     let mut ai = EmptyAI { loopnum: loopnum };
     game.play(&mut ai);
 }
-#+END_SRC
+
+```
 
 You can run above code by 
-#+BEGIN_SRC bash
+```shell
 cargo test -- --nocapture
-#+END_SRC
+```
+
