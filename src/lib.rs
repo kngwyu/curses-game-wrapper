@@ -7,7 +7,7 @@
 //! The result of vt100 emulation are stored as ```Vec<Vec<u8>>``` and AI recieves it as
 //! ```Changed(Vec<Vec<u8>>)```.
 //! # Examples
-//! ```
+//! ```no_run
 //! extern crate curses_game_wrapper as cgw;
 //! use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
 //! use std::time::Duration;
@@ -276,7 +276,7 @@ pub trait Reactor {
 ///
 /// The only usage is
 /// # Example
-/// ```
+/// ```no_run
 /// extern crate curses_game_wrapper as cgw;
 /// use cgw::{Reactor, ActionResult, AsciiChar, GameSetting};
 /// use std::time::Duration;
