@@ -66,6 +66,7 @@ mod term_data;
 /// It's imported from ```ascii``` crate for convinience.
 pub use ascii::AsciiChar;
 pub use sloggers::types::Severity;
+use termion::async_stdin;
 use termion::raw::IntoRawMode;
 use vte::Parser;
 
@@ -277,7 +278,7 @@ pub trait Reactor {
 /// # Example
 /// ```
 /// extern crate curses_game_wrapper as cgw;
-/// use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
+/// use cgw::{Reactor, ActionResult, AsciiChar, GameSetting};
 /// use std::time::Duration;
 /// fn main() {
 ///     struct EmptyAI;
@@ -327,20 +328,21 @@ impl GameEnv {
             DrawType::Null => Box::new(EmptyViewer {}),
         };
         let viewer_handle = viewer.run();
+        let mut stdin = async_stdin().bytes();
+        let mut ctrl_c = false;
+
         let mut parser = Parser::new();
         let mut proc_dead = false;
         let mut stored_map = None;
-        for i in 0..self.max_loop {
+        let mut cnt = 0;
+        while cnt < self.max_loop {
             macro_rules! do_action {
-                ($act:expr) => {
-                    if let Some(bytes) = ai.action($act, i) {
+                ($act:expr) => {{
+                    cnt += 1;
+                    if let Some(bytes) = ai.action($act, cnt) {
                         send_or!(self.process, &bytes);
                     }
-                }
-            }
-            if proc_dead {
-                trace!(self.term_data.logger, "Game ended in turn {}", i - 1);
-                break;
+                }}
             }
             let action_res = match self.process.rx.recv_timeout(self.timeout) {
                 Ok(rec) => match rec {
@@ -367,7 +369,7 @@ impl GameEnv {
                     RecvTimeoutError::Disconnected => panic!("disconnected"),
                 },
             };
-            trace!(self.term_data.logger, "{:?}, turn: {}", action_res, i);
+            trace!(self.term_data.logger, "{:?}, turn: {}", action_res, cnt);
             match action_res {
                 ActionResult::GameEnded => do_action!(ActionResult::GameEnded),
                 // store inputs until timeout occurs
@@ -379,6 +381,14 @@ impl GameEnv {
                     do_action!(ActionResult::NotChanged);
                 },
             }
+            if proc_dead {
+                trace!(self.term_data.logger, "Game ended in turn {}", cnt);
+                break;
+            }
+            if let Some(Ok(3)) = stdin.next() {
+                ctrl_c = true;
+                break;
+            }
         }
         if !proc_dead {
             debug!(
@@ -389,8 +399,10 @@ impl GameEnv {
             send_or!(viewer, Handle::Zero);
             let _ = ai.action(ActionResult::GameEnded, self.max_loop);
         }
-        proc_handle.join().unwrap();
-        viewer_handle.join().unwrap();
+        if !ctrl_c {
+            proc_handle.join().unwrap();
+            viewer_handle.join().unwrap();
+        }
     }
 }
 
@@ -595,7 +607,7 @@ impl Drop for ProcHandler {
 mod tests {
     #[test]
     fn it_works() {
-        use ::*;
+        use super::*;
         struct EmptyAI {
             loopnum: usize,
         };
@@ -617,6 +629,7 @@ mod tests {
             .lines(24)
             .columns(80)
             .debug_file("debug.txt")
+            .debug_level(Severity::Trace)
             .max_loop(loopnum + 1)
             .draw_on(Duration::from_millis(100));
         let game = gs.build();

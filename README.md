@@ -53,4 +53,7 @@ You can run above code by
 ```shell
 cargo run --example rogue
 ```
+and you can stop viewer by ```Ctrl-C```(signal handling is incomplete, but works well unless the AI get caught in an infinite loop).
 
+# Further Example
+See my [rogue-ai repo](https://github.com/kngwyu/rogue-ai-2nd) and [asciinema](https://asciinema.org/~kngwyu).
