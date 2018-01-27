@@ -4,6 +4,11 @@ rust:
   - beta
   - nightly
 
+addons:
+  apt:
+    packages:
+      - rogue
+
 script:
   - cargo test
   - cargo run --example rogue
