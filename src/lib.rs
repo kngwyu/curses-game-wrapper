@@ -58,6 +58,7 @@ extern crate bitflags;
 #[macro_use]
 extern crate slog;
 extern crate sloggers;
+extern crate termion;
 extern crate vte;
 
 mod term_data;
@@ -65,10 +66,13 @@ mod term_data;
 /// It's imported from ```ascii``` crate for convinience.
 pub use ascii::AsciiChar;
 pub use sloggers::types::Severity;
+use termion::raw::IntoRawMode;
+use vte::Parser;
+
+use term_data::TermData;
 use std::error::Error;
 use std::fmt::{self, Debug, Formatter};
 use std::io;
-use term_data::TermData;
 use std::process::{Child, Command, Stdio};
 use std::env;
 use std::io::{BufReader, Read, Write};
@@ -78,7 +82,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use vte::Parser;
 
 #[derive(Clone, Debug)]
 struct LogInfo {
@@ -461,8 +464,11 @@ impl GameViewer for TerminalViewer {
                 match game_input {
                     Handle::Valid(ref bytes) => {
                         let s = str::from_utf8(bytes).unwrap();
-                        print!("{}", s);
-                        io::stdout().flush().expect("Could not flush stdout");
+                        let mut stdout = io::stdout()
+                            .into_raw_mode()
+                            .expect("Couldn't get raw stdin");
+                        write!(stdout, "{}", s).expect("Couldn't write to stdin");
+                        stdout.flush().expect("Could not flush stdout");
                     }
                     Handle::Zero => break,
                     Handle::Panicked => panic!("main thread panicked"),
@@ -582,5 +588,39 @@ impl ProcHandler {
 impl Drop for ProcHandler {
     fn drop(&mut self) {
         self.my_proc.kill().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        use ::*;
+        struct EmptyAI {
+            loopnum: usize,
+        };
+        impl Reactor for EmptyAI {
+            fn action(&mut self, _screen: ActionResult, turn: usize) -> Option<Vec<u8>> {
+                let mut res = Vec::new();
+                match turn {
+                    val if val == self.loopnum - 1 => res.push(AsciiChar::CarriageReturn.as_byte()),
+                    val if val == self.loopnum - 2 => res.push(b'y'),
+                    val if val == self.loopnum - 3 => res.push(b'Q'),
+                    _ => res.push(b'j'),
+                };
+                Some(res)
+            }
+        }
+        let loopnum = 50;
+        let gs = GameSetting::new("rogue")
+            .env("ROGUEUSER", "EmptyAI")
+            .lines(24)
+            .columns(80)
+            .debug_file("debug.txt")
+            .max_loop(loopnum + 1)
+            .draw_on(Duration::from_millis(100));
+        let game = gs.build();
+        let mut ai = EmptyAI { loopnum: loopnum };
+        game.play(&mut ai);
     }
 }

@@ -9,7 +9,8 @@ This library is wrapper of curses games for AI making. What this crate provie is
 
 ``` rust
 extern crate curses_game_wrapper as cgw;
-use cgw::{Reactor, ActioResult, AsciiChar, GameSetting, Severity};
+use cgw::{ActionResult, AsciiChar, GameSetting, Reactor};
+use std::time::Duration;
 fn main() {
     struct EmptyAI {
         loopnum: usize,
@@ -46,11 +47,10 @@ fn main() {
     let mut ai = EmptyAI { loopnum: loopnum };
     game.play(&mut ai);
 }
-
 ```
 
 You can run above code by 
 ```shell
-cargo test -- --nocapture
+cargo run --example rogue
 ```
 
