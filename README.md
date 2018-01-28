@@ -2,6 +2,7 @@
 [![Crates.io](http://meritbadge.herokuapp.com/curses-game-wrapper)](https://crates.io/crates/curses-game-wrapper)
 [![Documentation](https://docs.rs/curses-game-wrapper/badge.svg)](https://docs.rs/curses-game-wrapper)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Build Status](https://travis-ci.org/kngwyu/curses-game-wrapper.svg?branch=master)](https://travis-ci.org/kngwyu/curses-game-wrapper)
 This library is wrapper of curses games for AI making. What this crate provie is
 - Spawning CUI game as child process
 - Emulation of vt100 control sequence(helped by vte crate)
