@@ -9,7 +9,7 @@ description = "wrapper for curses games to make game AI"
 ascii = "0.8.6"
 bitflags = "1.0.1"
 vte = "0.3.2"
-sloggers = "0.2.4"
+sloggers = "0.2.6"
 clippy = {version = "0.0.182", optional = true}
 termion = "1.5.1"
 
