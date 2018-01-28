@@ -63,6 +63,20 @@ impl TermData {
             preceeding: None,
         }
     }
+    // For debug usage only
+    fn from_buf(buf: Vec<Vec<u8>>) -> TermData {
+        TermData {
+            cur: Cursor::default(),
+            height: buf.len(),
+            width: buf[0].len(),
+            mode: TermMode::default(),
+            scroll_range: LineRange(0, buf.len()),
+            saved_cur: Cursor::default(),
+            logger: NullLoggerBuilder {}.build().ok().unwrap(),
+            preceeding: None,
+            buf: buf,
+        }
+    }
     pub fn ret_screen(&self) -> Vec<Vec<u8>> {
         self.buf.clone()
     }
@@ -77,6 +91,7 @@ impl TermData {
         );
     }
     fn input(&mut self, c: u8) {
+        trace!(self.logger, "(input) c: {}", c);
         while self.cur.x >= self.width {
             if !self.mode.contains(TermMode::LINE_WRAP) {
                 return;
@@ -90,9 +105,14 @@ impl TermData {
         self.cur.x += 1;
     }
     fn carriage_return(&mut self) {
+        debug!(self.logger, "(carriage_return)");
         self.cur.x = 0;
     }
     fn linefeed(&mut self) {
+        debug!(
+            self.logger,
+            "line_feed, cur: {:?}, range: {:?}", self.cur, self.scroll_range
+        );
         let nxt = self.cur.y + 1;
         if nxt == self.scroll_range.1 {
             self.scroll_up(1);
@@ -101,6 +121,7 @@ impl TermData {
         }
     }
     fn backspace(&mut self) {
+        trace!(self.logger, "(backspace)");
         if self.cur.x > 0 {
             self.cur.x -= 1;
         }
@@ -137,6 +158,7 @@ impl TermData {
         self.cur = c;
     }
     fn clear_scr(&mut self, mode: ClearMode) {
+        debug!(self.logger, "(clear_scr): {:?}", mode);
         match mode {
             ClearMode::All => for i in 0..self.height {
                 for j in 0..self.width {
@@ -168,6 +190,7 @@ impl TermData {
         }
     }
     fn clear_line(&mut self, mode: LineClearMode) {
+        debug!(self.logger, "(clear_line): {:?}", mode);
         match mode {
             LineClearMode::Right => for i in self.cur.x..self.width {
                 self.buf[self.cur.y][i] = b' ';
@@ -185,13 +208,26 @@ impl TermData {
         self.scroll_up_relative(origin, num);
     }
     fn scroll_up_relative(&mut self, origin: usize, num: usize) {
+        assert!(
+            self.scroll_range.contains(origin),
+            "scroll_down_relative: invalid origin! {}, {:?}",
+            origin,
+            self.scroll_range
+        );
+        debug!(
+            self.logger,
+            "scroll_down_relative: origin={}, num={}", origin, num
+        );
         let mut tmp = self.buf.clone();
-        for i in origin..self.scroll_range.1 {
-            if i + num < self.scroll_range.1 {
-                tmp[i] = self.buf[i + num].clone();
-            } else {
-                for j in 0..self.width {
-                    tmp[i][j] = b' ';
+        {
+            let buf = &self.buf[origin..self.scroll_range.1];
+            for (i, tmp_v) in tmp[origin..self.scroll_range.1].iter_mut().enumerate() {
+                if origin + i < self.scroll_range.1 - num {
+                    if let Some(buf_v) = buf.get(i + num) {
+                        *tmp_v = buf_v.clone();
+                    }
+                } else {
+                    tmp_v.iter_mut().for_each(|x| *x = b' ');
                 }
             }
         }
@@ -202,47 +238,65 @@ impl TermData {
         self.scroll_down_relative(origin, num);
     }
     fn scroll_down_relative(&mut self, origin: usize, num: usize) {
+        assert!(
+            self.scroll_range.contains(origin),
+            "scroll_up_relative: invalid origin! {}, {:?}",
+            origin,
+            self.scroll_range
+        );
+        debug!(
+            self.logger,
+            "scroll_up_relative: origin={}, num={}", origin, num
+        );
         let mut tmp = self.buf.clone();
-        for i in origin..self.scroll_range.1 {
-            if i + num < self.scroll_range.1 {
-                tmp[i + num] = self.buf[i].clone();
-            } else {
-                for j in 0..self.width {
-                    tmp[i][j] = b' ';
+        {
+            let buf = &self.buf[origin..self.scroll_range.1];
+            for (i, tmp_v) in tmp[origin..self.scroll_range.1].iter_mut().enumerate() {
+                if i >= num {
+                    if let Some(buf_v) = buf.get(i - num) {
+                        *tmp_v = buf_v.clone();
+                    }
+                } else {
+                    tmp_v.iter_mut().for_each(|x| *x = b' ');
                 }
             }
         }
         self.buf = tmp;
     }
     fn insert_blank_lines(&mut self, num: usize) {
+        trace!(self.logger, "insert_blank_lines, {}", num);
         if self.scroll_range.contains(self.cur.y) {
             let origin = self.cur.y;
             self.scroll_down_relative(origin, num);
         }
     }
     fn delete_lines(&mut self, num: usize) {
+        trace!(self.logger, "delete_lines, {}", num);
         if self.scroll_range.contains(self.cur.y) {
             let origin = self.cur.y;
             self.scroll_up_relative(origin, num);
         }
     }
     fn insert_blank_chars(&mut self, num: usize) {
+        trace!(self.logger, "insert_blank_chars, {}", num);
         let mut tmp = vec![b' '; self.width];
         for j in 0..self.width {
             if j < self.cur.x {
                 tmp[j] = self.buf[self.cur.y][j];
             } else if j >= self.cur.x + num {
-                tmp[j] = self.buf[self.cur.y][j + num];
+                tmp[j] = self.buf[self.cur.y][j - num];
             }
         }
         self.buf[self.cur.y] = tmp;
     }
     fn erase_chars(&mut self, num: usize) {
+        trace!(self.logger, "erase_chars, {}", num);
         for j in self.cur.x..min(self.cur.x + num, self.width) {
             self.buf[self.cur.y][j] = b' ';
         }
     }
     fn delete_chars(&mut self, num: usize) {
+        trace!(self.logger, "delete_chars, {}", num);
         let mut tmp = vec![b' '; self.width];
         for j in 0..self.width {
             if j < self.cur.x {
@@ -255,6 +309,7 @@ impl TermData {
     }
     fn deccolm(&self) {}
     fn unset_mode(&mut self, mode: ModeInt) {
+        debug!(self.logger, "unset_mode: {:?}", mode);
         match mode {
             ModeInt::SwapScreenAndSetRestoreCursor => self.restore_cursor(),
             ModeInt::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
@@ -273,6 +328,7 @@ impl TermData {
         }
     }
     fn set_mode(&mut self, mode: ModeInt) {
+        debug!(self.logger, "set_mode: {:?}", mode);
         match mode {
             ModeInt::SwapScreenAndSetRestoreCursor => self.restore_cursor(),
             ModeInt::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
@@ -297,12 +353,15 @@ impl TermData {
         self.mode.remove(TermMode::APP_KEYPAD);
     }
     fn save_cursor(&mut self) {
+        trace!(self.logger, "save_cursor");
         self.saved_cur = self.cur;
     }
     fn restore_cursor(&mut self) {
+        trace!(self.logger, "restore_cursor");
         self.cur = self.saved_cur;
     }
     fn reverse_index(&mut self) {
+        trace!(self.logger, "reverse_index");
         if self.cur.y == self.scroll_range.0 {
             self.scroll_down(1);
         } else if self.cur.y > 0 {
@@ -789,4 +848,163 @@ mod C1 {
     pub const PM: u8 = 0x9E;
     /// Application Program Command (to word processor), term by ST
     pub const APC: u8 = 0x9F;
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use str::from_utf8;
+    const MAP1: &str = "
+        ----------------
+        |.....@........|
+        |........%.....|
+        |..............|
+        |..............|
+        ------------+---
+";
+    // scroll_up 2
+    const MAP2: &str = "
+        |........%.....|
+        |..............|
+        |..............|
+        ------------+---
+                        
+                        
+";
+    // scroll_down 2
+    const MAP3: &str = "                        
+                        
+        ----------------
+        |.....@........|
+        |........%.....|
+        |..............|
+";
+    // insert brank lines from: 3 num: 2
+    const MAP4: &str = "
+        ----------------
+        |.....@........|
+        |........%.....|
+                        
+                        
+        |..............|
+";
+    // delete lines from: 1 num: 2
+    const MAP5: &str = "
+        ----------------
+        |..............|
+        |..............|
+        ------------+---
+                        
+                        
+";
+    // delete chars from: (14, 1) num: 5
+    const MAP6: &str = "
+        ----------------
+        |.........|     
+        |........%.....|
+        |..............|
+        |..............|
+        ------------+---
+";
+    const MAP7: &str = "
+        ----------------
+        |.....     @....
+        |........%.....|
+        |..............|
+        |..............|
+        ------------+---
+";
+    const MAP8: &str = "
+        ----------------
+        |.....     ....|
+        |........%.....|
+        |..............|
+        |..............|
+        ------------+---
+";
+    #[test]
+    fn test_scroll_up() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.scroll_up(2);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP2));
+    }
+    #[test]
+    fn test_scroll_down() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.scroll_down(2);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP3));
+    }
+    #[test]
+    fn test_insert_lines() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.goto_y(3);
+        initial.insert_blank_lines(2);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP4));
+    }
+    #[test]
+    fn test_delete_lines() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.goto_y(1);
+        initial.delete_lines(2);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP5));
+    }
+    #[test]
+    fn test_delete_chars() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.goto_y(1);
+        initial.goto_x(14);
+        initial.delete_chars(5);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP6));
+    }
+    #[test]
+    fn test_insert_chars() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.goto_y(1);
+        initial.goto_x(14);
+        initial.insert_blank_chars(5);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP7));
+    }
+    #[test]
+    fn test_erase_chars() {
+        let mut initial = TermData::from_buf(str_to_buf(MAP1));
+        initial.goto_y(1);
+        initial.goto_x(14);
+        initial.erase_chars(5);
+        println!("\n{}", &buf_to_str(&initial.buf));
+        assert_eq!(initial.buf, str_to_buf(&MAP8));
+    }
+    fn buf_to_str(buf: &Vec<Vec<u8>>) -> String {
+        let mut res = String::new();
+        let len = buf.len();
+        for (i, v) in buf.iter().enumerate() {
+            res.push_str(from_utf8(&v).unwrap());
+            if i < len - 1 {
+                res.push('\n');
+            }
+        }
+        res
+    }
+    fn str_to_buf(s: &str) -> Vec<Vec<u8>> {
+        let mut res = Vec::new();
+        let mut buf = String::new();
+        let mut reader = BufReader::new(s.as_bytes());
+        while let Ok(n) = reader.read_line(&mut buf) {
+            if n == 0 || buf.pop() != Some('\n') {
+                break;
+            }
+            if buf.is_empty() {
+                continue;
+            }
+            res.push(buf.as_bytes().to_owned());
+            buf.clear();
+        }
+        res
+    }
 }

@@ -112,7 +112,7 @@ enum DrawType {
 /// generated using Gamesetting::new(command name) and other settings
 /// can be added by builder methods.
 /// # Example
-/// ```
+/// ```no_run
 /// extern crate curses_game_wrapper as cgw;
 /// use cgw::{Reactor, ActionResult, AsciiChar, GameSetting, Severity};
 /// use std::time::Duration;
@@ -606,7 +606,8 @@ impl Drop for ProcHandler {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn it_works() {
+    #[ignore]
+    fn test_gameplay() {
         use super::*;
         struct EmptyAI {
             loopnum: usize,
@@ -623,7 +624,7 @@ mod tests {
                 Some(res)
             }
         }
-        let loopnum = 50;
+        let loopnum = 10;
         let gs = GameSetting::new("rogue")
             .env("ROGUEUSER", "EmptyAI")
             .lines(24)

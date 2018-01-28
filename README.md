@@ -57,3 +57,10 @@ and you can stop viewer by ```Ctrl-C```(signal handling is incomplete, but works
 
 # Further Example
 See my [rogue-ai repo](https://github.com/kngwyu/rogue-ai-2nd) and [asciinema](https://asciinema.org/~kngwyu).
+
+# Acknowledgements
+https://ttssh2.osdn.jp/manual/ja/about/ctrlseq.html  
+https://www.xfree86.org/current/ctlseqs.html  
+https://www.vt100.net/docs/vt100-ug/contents.html  
+https://github.com/jwilm/alacritty  
+
